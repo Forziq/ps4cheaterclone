@@ -26,6 +26,7 @@
   <!-- The same fake ps4debug server the Core tests use. -->
   <ItemGroup>
     <Compile Include="..\PS4Mem.Core.Tests\Fakes\FakePs4Server.cs" Link="Fakes\FakePs4Server.cs" />
+    <Compile Include="..\PS4Mem.Core.Tests\Fakes\FakeLoader.cs" Link="Fakes\FakeLoader.cs" />
   </ItemGroup>
 
   <!-- api.http is replayed by ApiHttpFileTests, so the samples can't drift from the API. -->

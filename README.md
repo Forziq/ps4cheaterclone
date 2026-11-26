@@ -14,6 +14,7 @@ Working now:
 - Listing processes with the `info` command. Tested on a real console running ps4debug-NG v1.3, with 66 processes listed.
 - A process picker. It shows only the suggested game, marked `→ suggested:`. Press Return to take it. Type `list` to see every process, or type a pid or a name.
 - Section selection with the `sections` command. It lists the memory sections a scan will use, and only reads.
+- Sending the payload with the `inject` command, and with the API's `POST /api/inject` endpoint.
 
 The `scan` command passed its first real-console test on Assassin's Creed III (PS4, GoldHEN, ps4debug-NG 1.3.4). It found an exact 4-byte value, the in-game money. A next scan narrowed the results to one address, and a write changed it. The new value showed in the game. The command has:
 
@@ -22,11 +23,11 @@ The `scan` command passed its first real-console test on Assassin's Creed III (P
 
 Only exact 4-byte (32-bit) values work for now. Other value types and compare types come later.
 
-Phase 1 has started. The backend API (`src/PS4Mem.Api`) listens on 127.0.0.1:5080 only, and it has settings endpoints so far. Connection, process and map endpoints are next, then payload injection, more value types and the cheat list.
+Phase 1 is in progress. The backend API (`src/PS4Mem.Api`) listens on 127.0.0.1:5080 only. It has endpoints for settings, connection, processes, sections and payload injection. More value types and the cheat list come later.
 
 ## Planned features
 
-Phase 1 is a local API (ASP.NET Core, listening on localhost only). It will inject the payload over the GoldHEN BinLoader and save cheat tables per game, keyed by title ID.
+Phase 1 is a local API (ASP.NET Core, listening on localhost only). It injects the payload over the GoldHEN BinLoader, and it will save cheat tables per game, keyed by title ID.
 
 Phase 2 is a native macOS app written in SwiftUI, in the `mac/` folder. It talks to the local backend API. The finished app will be a double-clickable `PS4Mem.app` that contains the backend and starts and stops it itself, so you won't need a .NET install to run it.
 
@@ -68,15 +69,32 @@ The tests don't need a console. The protocol code runs against a fake TCP server
 
 ## Usage
 
-Phase 0 needs the payload loaded by hand. From Phase 1 the app will do this itself.
+The `inject` command sends the payload for you, so you don't need to send it by hand.
 
-1. Check whether the payload is already running. Replace `$PS4_IP` with your PS4's address, or set `PS4_IP` in your shell first:
+1. Send the payload and print the ps4debug version. Replace `$PS4_IP` with your PS4's address, or set `PS4_IP` in your shell first:
+
+   ```bash
+   dotnet run --project src/PS4Mem.Cli -- inject --ip $PS4_IP
+   ```
+
+   The command sends the ps4debug payload to the PS4's payload loader (GoldHEN BinLoader, port 9090). It waits up to 20 seconds for ps4debug to answer on port 744. Then it connects and prints the ps4debug version.
+
+   Options:
+
+   - `--payload <file>` sends a different payload file. The default is `payloads/ps4debug-ng_v1.3.4_release_2026-11-05.bin`.
+   - `--loader-port <port>` sets the loader port. The default is 9090. Use 9020 or 9021 for other loaders.
+
+   The command refuses to send the payload if ps4debug already answers on port 744. A second copy can freeze the console.
+
+   If you get "Connection refused" on the loader port, BinLoader is off, or it has already been used this session. Toggle BinLoader in GoldHEN, or restart the PS4, then try again.
+
+2. Fallback: send the payload by hand. Use this only if `inject` doesn't work for you. First check whether the payload is already running:
 
    ```bash
    nc -z -G 2 $PS4_IP 744 && echo "already running"
    ```
 
-2. If it isn't running, send the payload to BinLoader:
+   If it isn't running, send the payload to BinLoader:
 
    ```bash
    nc -w 3 $PS4_IP 9090 < payloads/ps4debug-ng_v1.3.4_release_2026-11-05.bin
@@ -156,6 +174,10 @@ Phase 0 needs the payload loaded by hand. From Phase 1 the app will do this itse
    Speed depends on the method and the network. On Assassin's Creed III, a first scan of about 3.4 GB took about 90 seconds with `console`. The PS4 does the comparison, so only the matches cross the network. The same scan with `local` took about 14 minutes over Wi-Fi, at about 4 MB/s. Both found the same 36 results. A wired connection is faster.
 
 To write a debug log without the flag, set `PS4MEM_DEBUG=1`. Logs go to `logs/`, which is git-ignored. Attach the log when you report a problem.
+
+### Local API
+
+The local API (`src/PS4Mem.Api`) has a `POST /api/inject` endpoint that does the same job as the `inject` command. The request body is optional. It takes `ip`, `payloadPath` and `loaderPort`. A path and port that work are saved in the settings. A sample request is in [`src/PS4Mem.Api/api.http`](src/PS4Mem.Api/api.http).
 
 ## How it works
 

@@ -1,6 +1,7 @@
 using PS4Mem.Cli;
 using PS4Mem.Core;
 using PS4Mem.Core.Logging;
+using PS4Mem.Core.Payload;
 using PS4Mem.Core.Protocol;
 using PS4Mem.Core.Sections;
 
@@ -10,6 +11,9 @@ using PS4Mem.Core.Sections;
 //   --ip <ip>       console IP (else PS4_IP, then ps4ip.local, then app settings)
 //   --port <port>   ps4debug command port (default 744)
 // Commands:
+//   inject          send the ps4debug payload to the loader, wait for it, then check it answers
+//                   --payload <file>      payload .bin (default PS4MemSettings.PayloadPath)
+//                   --loader-port <port>  loader port (default 9090; 9020/9021 on other loaders)
 //   info            ps4debug version and the process list (read-only)
 //   sections        choose a process, then its memory maps with the default scan selection (read-only)
 //                   --pid <pid> / --name <name>   pick the process yourself
@@ -32,6 +36,8 @@ var includeReadOnly = TakeFlag(argList, "--include-readonly");
 var selectAll = TakeFlag(argList, "--all");
 var method = TakeOption(argList, "--method");
 var unaligned = TakeFlag(argList, "--unaligned");
+var payloadPath = TakeOption(argList, "--payload");
+var loaderPortText = TakeOption(argList, "--loader-port");
 
 var settings = PS4MemSettings.Default with { DebugLogging = debug };
 if (port is not null)
@@ -39,6 +45,19 @@ if (port is not null)
     if (!int.TryParse(port, out var p) || p is < 1 or > 65535)
         return Fail($"Invalid --port '{port}'.");
     settings = settings with { CommandPort = p };
+}
+
+if (loaderPortText is not null)
+{
+    if (!int.TryParse(loaderPortText, out var lp) || lp is < 1 or > 65535)
+        return Fail($"Invalid --loader-port '{loaderPortText}'.");
+    settings = settings with { PayloadPort = lp };
+}
+if (payloadPath is not null)
+{
+    if (payloadPath.Length == 0)
+        return Fail("--payload needs a file path.");
+    settings = settings with { PayloadPath = payloadPath };
 }
 
 int? pid = null;
@@ -81,6 +100,8 @@ log.Info("cli", ipSource is null ? "Console IP not set" : $"Console IP from {ipS
 var command = argList.FirstOrDefault();
 switch (command)
 {
+    case "inject":
+        return await Inject(settings, log);
     case "info":
         return Info(settings, log);
     case "sections":
@@ -97,6 +118,43 @@ switch (command)
     default:
         PrintUsage(settings);
         return Fail($"Unknown command '{command}'.");
+}
+
+static async Task<int> Inject(PS4MemSettings settings, DebugLog log)
+{
+    if (settings.ConsoleIp.Length == 0)
+        return Fail(ConsoleIpResolver.NotSetMessage);
+
+    using var cts = new CancellationTokenSource();
+    ConsoleCancelEventHandler onCancel = (_, e) => { e.Cancel = true; cts.Cancel(); };
+    Console.CancelKeyPress += onCancel;
+    try
+    {
+        var injection = await new PayloadInjector(settings, log)
+            .InjectAsync(settings.ConsoleIp, report: Console.WriteLine, ct: cts.Token);
+        Console.WriteLine($"ps4debug answered after {injection.WaitedForStart.TotalSeconds:0.0} s.");
+
+        using var client = new PS4DebugClient(settings, log);
+        client.Connect();
+        Console.WriteLine($"Connected: ps4debug version {client.GetVersion()}. Run `info` or `scan` next.");
+        client.Disconnect();
+        log.Info("cli", $"inject: {injection.BytesSent} bytes to port {injection.LoaderPort}, ps4debug answers");
+        return 0;
+    }
+    catch (OperationCanceledException)
+    {
+        log.Warn("cli", "inject cancelled");
+        return Fail("Cancelled.");
+    }
+    catch (Ps4ProtocolException e) // includes PayloadException
+    {
+        log.Error("cli", "inject failed", e);
+        return Fail(e.Message);
+    }
+    finally
+    {
+        Console.CancelKeyPress -= onCancel;
+    }
 }
 
 static int Info(PS4MemSettings settings, DebugLog log)
@@ -201,6 +259,10 @@ static void PrintUsage(PS4MemSettings s)
         Usage: ps4mem <command> [--ip <ip>] [--port <port>] [--debug] [options]
 
         Commands:
+          inject    Send the ps4debug payload to the PS4's payload loader (GoldHEN BinLoader), wait
+                    up to {s.PayloadStartTimeout.TotalSeconds:0} s for ps4debug to answer, then check it does. Refuses if
+                    ps4debug already runs (a second copy can freeze the console). BinLoader takes
+                    one payload per session: toggle it in GoldHEN or restart the PS4 to send again.
           info      Show the ps4debug version and the process list (read-only).
           sections  Choose a process (the likely game is suggested) and list its memory sections;
                     ✓ marks the ones a scan would use (read-only).
@@ -217,6 +279,10 @@ static void PrintUsage(PS4MemSettings s)
           --filter a,b,c      Section name filter (default {string.Join(",", s.SectionNameFilter)}; "" = any name)
           --include-readonly  Also select sections that aren't writable
           --all               Select every readable section
+
+        Inject options:
+          --payload <file>      Payload .bin (default {s.PayloadPath})
+          --loader-port <port>  Loader port (default {s.PayloadPort}; others: {string.Join(", ", s.LoaderPortOptions.Skip(1))})
 
         Scan options:
           --method local|console  Compare on the Mac (default) or on the PS4 (ps4debug-NG)

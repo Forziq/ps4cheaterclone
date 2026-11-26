@@ -1,4 +1,5 @@
 using PS4Mem.Core.Logging;
+using PS4Mem.Core.Payload;
 using PS4Mem.Core.Protocol;
 using PS4Mem.Core.Sections;
 using PS4Mem.Core.Settings;
@@ -35,6 +36,9 @@ public sealed record ConnectionStatus(
 /// <summary>The process list with the suggested game. The suggestion is never applied by itself.</summary>
 public sealed record ProcessListing(IReadOnlyList<ProcessEntry> Processes, ProcessPick Suggestion);
 
+/// <summary>What <c>POST /api/inject</c> did: the payload sent, then the connection made.</summary>
+public sealed record InjectResult(PayloadInjection Injection, ConnectionStatus Status);
+
 /// <summary>How to build the sections list; null fields use the settings' defaults.</summary>
 public sealed record SectionOptions(IReadOnlyList<string>? NameFilter = null, bool IncludeReadOnly = false, bool SelectAll = false);
 
@@ -58,6 +62,7 @@ public sealed class ConnectionManager : IDisposable
     private PS4MemSettings? _sessionSettings;
     private ConnectionStatus? _connected;
     private string? _lastError;
+    private int _injecting; // 1 while an injection runs (it waits up to 20 s, outside the lock)
 
     public ConnectionManager(AppSettingsStore store, IpSources ipSources, DebugLogSwitch logs, PS4MemSettings? defaults = null)
     {
@@ -102,40 +107,112 @@ public sealed class ConnectionManager : IDisposable
             DropIfLost();
             if (_connected is not null)
                 throw ConnectionStateException.AlreadyConnected($"{_connected.Ip}:{_connected.Port}");
+            return ConnectTo(RequireIp(ip));
+        }
+    }
 
-            var resolved = ResolveIp(ip)
-                ?? throw new ArgumentException(
-                    "The PS4 IP is not set. Enter it in the app, set PS4_IP, or put it in ps4ip.local.");
+    /// <summary>
+    /// Sends the payload to the console's loader, waits for ps4debug to answer, then connects.
+    /// The IP is found as for <see cref="Connect"/>. A <paramref name="payloadPath"/> or
+    /// <paramref name="loaderPort"/> that the loader accepted is saved in the settings; null uses
+    /// the saved ones. Refuses when connected or when ps4debug already answers (a second copy can
+    /// freeze the console).
+    /// </summary>
+    /// <exception cref="PayloadException">The injection failed (see <see cref="PayloadErrorKind"/>).</exception>
+    /// <exception cref="ConnectionStateException">Another injection is running.</exception>
+    public async Task<InjectResult> InjectAsync(
+        string? ip = null, string? payloadPath = null, int? loaderPort = null,
+        Action<string>? report = null, CancellationToken ct = default)
+    {
+        ResolvedConsoleIp resolved;
+        PS4MemSettings settings;
+        lock (_gate)
+        {
+            DropIfLost();
+            if (_connected is not null)
+                throw new PayloadException(PayloadErrorKind.AlreadyRunning,
+                    $"Already connected to {_connected.Ip}:{_connected.Port}, so the payload is running. No need to inject it again.");
+            resolved = RequireIp(ip);
+            settings = CurrentSettings with { ConsoleIp = resolved.Ip };
+        }
 
-            var settings = CurrentSettings with { ConsoleIp = resolved.Ip };
-            // Logging on/off is set at startup and by PUT /api/settings; connect just uses it.
+        if (Interlocked.Exchange(ref _injecting, 1) == 1)
+            throw new ConnectionStateException("A payload injection is already running. Wait for it to finish.");
+        try
+        {
             var log = Log;
-            log.Info(Cat, $"Connect to {resolved.Ip}:{settings.CommandPort} (IP from {resolved.Source})");
-
-            var client = new PS4DebugClient(settings, log);
+            log.Info(Cat, $"Inject the payload into {resolved.Ip} (IP from {resolved.Source})");
+            PayloadInjection injection;
             try
             {
-                client.Connect();
-                var version = client.GetVersion();
-
-                _client = client;
-                _sessionSettings = settings;
-                _lastError = null;
-                _connected = new ConnectionStatus(true, resolved.Ip, settings.CommandPort, version,
-                    DateTimeOffset.Now, log.FilePath, resolved.Ip, resolved.Source, null);
-                log.Info(Cat, $"Connected to {resolved.Ip}:{settings.CommandPort}, ps4debug {version}");
+                injection = await new PayloadInjector(settings, log).InjectAsync(resolved.Ip, payloadPath, loaderPort, report, ct);
             }
-            catch (Exception e)
+            catch (PayloadException e)
             {
-                client.Dispose();
-                _lastError = e.Message;
-                log.Error(Cat, $"Connect to {resolved.Ip}:{settings.CommandPort} failed: {e.Message}");
+                // NoAnswer means the loader took the file, so the path and port were right.
+                if (e.Kind == PayloadErrorKind.NoAnswer)
+                    RememberPayload(payloadPath, loaderPort);
+                lock (_gate) _lastError = e.Message;
                 throw;
             }
 
-            _store.RememberIp(resolved.Ip, _defaults.MaxRecentIps);
-            return _connected;
+            RememberPayload(payloadPath, loaderPort);
+            report?.Invoke($"ps4debug answered after {injection.WaitedForStart.TotalSeconds:0.0} s. Connecting ...");
+            lock (_gate)
+            {
+                DropIfLost();
+                if (_connected is not null) // someone pressed Connect while we waited
+                    return new InjectResult(injection, _connected);
+                return new InjectResult(injection, ConnectTo(resolved));
+            }
         }
+        finally
+        {
+            Volatile.Write(ref _injecting, 0);
+        }
+    }
+
+    private void RememberPayload(string? payloadPath, int? loaderPort)
+    {
+        if (payloadPath is null && loaderPort is null) return;
+        _store.Update(new AppSettingsUpdate { PayloadPath = payloadPath, LoaderPort = loaderPort });
+    }
+
+    private ResolvedConsoleIp RequireIp(string? ip) =>
+        ResolveIp(ip) ?? throw new ArgumentException(
+            "The PS4 IP is not set. Enter it in the app, set PS4_IP, or put it in ps4ip.local.");
+
+    /// <summary>Connects to an already resolved IP. Call with <see cref="_gate"/> held and not connected.</summary>
+    private ConnectionStatus ConnectTo(ResolvedConsoleIp resolved)
+    {
+        var settings = CurrentSettings with { ConsoleIp = resolved.Ip };
+        // Logging on/off is set at startup and by PUT /api/settings; connect just uses it.
+        var log = Log;
+        log.Info(Cat, $"Connect to {resolved.Ip}:{settings.CommandPort} (IP from {resolved.Source})");
+
+        var client = new PS4DebugClient(settings, log);
+        try
+        {
+            client.Connect();
+            var version = client.GetVersion();
+
+            _client = client;
+            _sessionSettings = settings;
+            _lastError = null;
+            _connected = new ConnectionStatus(true, resolved.Ip, settings.CommandPort, version,
+                DateTimeOffset.Now, log.FilePath, resolved.Ip, resolved.Source, null);
+            log.Info(Cat, $"Connected to {resolved.Ip}:{settings.CommandPort}, ps4debug {version}");
+        }
+        catch (Exception e)
+        {
+            client.Dispose();
+            _lastError = e.Message;
+            log.Error(Cat, $"Connect to {resolved.Ip}:{settings.CommandPort} failed: {e.Message}");
+            throw;
+        }
+
+        _store.RememberIp(resolved.Ip, _defaults.MaxRecentIps);
+        return _connected;
     }
 
     /// <summary>Closes the connection cleanly. Safe to call when not connected.</summary>

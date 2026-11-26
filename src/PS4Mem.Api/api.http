@@ -15,17 +15,20 @@ GET {{host}}/api/status
 GET {{host}}/api/settings
 
 ### Change some settings (only the fields you send change)
+# Other fields: consoleIp, commandPort, loaderPort (9090 GoldHEN; 9020/9021 other loaders), payloadPath.
 PUT {{host}}/api/settings
 Content-Type: application/json
 
 {
-  "loaderPort": 9090,
   "debugLogging": false
 }
 
-### Connect. With no ip this uses PS4_IP, then ps4ip.local, then the saved IP.
-# To pick the IP yourself, send {"ip": "<PS4_IP>"} instead.
-POST {{host}}/api/connect
+### Inject the payload, wait for ps4debug (up to 20 s), then connect. Once per PS4 session:
+# BinLoader takes one payload, then refuses until it's toggled in GoldHEN or the PS4 restarts.
+# 409 if ps4debug already answers: use Connect instead (a second copy can freeze the console).
+# Optional: {"ip": "<PS4_IP>", "payloadPath": "/path/to/ps4debug.bin", "loaderPort": 9090};
+# a path and port that work are saved.
+POST {{host}}/api/inject
 Content-Type: application/json
 
 {}
@@ -49,4 +52,14 @@ GET {{host}}/api/processes/{{pid}}/maps?filter=anon,exe&includeReadOnly=true
 GET {{host}}/api/processes/{{pid}}/maps?all=true
 
 ### Disconnect (always 200)
+POST {{host}}/api/disconnect
+
+### Connect when the payload is already running. With no ip this uses PS4_IP, then
+# ps4ip.local, then the saved IP. To pick the IP yourself, send {"ip": "<PS4_IP>"} instead.
+POST {{host}}/api/connect
+Content-Type: application/json
+
+{}
+
+### Disconnect again
 POST {{host}}/api/disconnect

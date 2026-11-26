@@ -18,9 +18,12 @@ public sealed class FakePs4Server : IDisposable
     public int Port { get; }
     public Task Completion { get; }
 
-    public FakePs4Server(params Action<FakeConsole>[] scripts)
+    public FakePs4Server(params Action<FakeConsole>[] scripts) : this(0, scripts) { }
+
+    /// <summary>Listens on <paramref name="port"/> (0 = any free port).</summary>
+    public FakePs4Server(int port, params Action<FakeConsole>[] scripts)
     {
-        _listener = new TcpListener(IPAddress.Loopback, 0);
+        _listener = new TcpListener(IPAddress.Loopback, port);
         _listener.Start();
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
         Completion = Task.Run(() =>

@@ -8,6 +8,16 @@ namespace PS4Mem.Api;
 /// <summary>Body of <c>POST /api/connect</c>. No body, or no ip, uses PS4_IP, ps4ip.local or the saved IP.</summary>
 public sealed record ConnectRequest(string? Ip);
 
+/// <summary>
+/// Body of <c>POST /api/inject</c>. Every field is optional: no ip finds it as connect does,
+/// no payloadPath or loaderPort uses the saved ones (and ones that work are saved).
+/// </summary>
+public sealed record InjectRequest(string? Ip, string? PayloadPath, int? LoaderPort);
+
+/// <summary>What the injection sent, how long ps4debug took to start, and the connection status.</summary>
+public sealed record InjectResponseDto(
+    string PayloadPath, long BytesSent, int LoaderPort, double WaitedSeconds, ConnectionStatus Status);
+
 /// <summary>One process. <c>Suggested</c> marks the likely game; the user still chooses.</summary>
 public sealed record ProcessDto(int Pid, string Name, bool Suggested, string? SuggestionReason);
 
@@ -39,6 +49,18 @@ public static class ConnectionEndpoints
         // 200 with the status; 400 no/invalid IP; 409 already connected; 502 the PS4 didn't answer.
         app.MapPost("/api/connect", (ConnectRequest? request, ConnectionManager connection) =>
             connection.Connect(request?.Ip));
+
+        // Sends the payload, waits up to 20 s for ps4debug, then connects. 200 with what it did and the status;
+        // 400 no/invalid IP or a missing/empty payload file; 409 already connected, ps4debug already
+        // answers, or another injection is running; 502 loader refused or ps4debug never answered.
+        app.MapPost("/api/inject", async (InjectRequest? request, ConnectionManager connection, HttpContext http) =>
+        {
+            var result = await connection.InjectAsync(request?.Ip, request?.PayloadPath, request?.LoaderPort,
+                ct: http.RequestAborted);
+            var i = result.Injection;
+            return new InjectResponseDto(i.PayloadPath, i.BytesSent, i.LoaderPort,
+                Math.Round(i.WaitedForStart.TotalSeconds, 1), result.Status);
+        });
 
         // Always 200, also when not connected.
         app.MapPost("/api/disconnect", (ConnectionManager connection) =>

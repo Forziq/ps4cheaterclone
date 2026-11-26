@@ -19,7 +19,12 @@ public sealed partial class ApiHttpFileTests
     [Fact]
     public async Task Every_call_in_api_http_works_against_the_fake_console()
     {
-        using var server = new FakePs4Server(c =>
+        // The file injects first: the fake loader takes the payload and then "starts" ps4debug.
+        var commandPort = FakeLoader.FreePort();
+        FakePs4Server? server = null;
+        using var loader = new FakeLoader(_ => server = new FakePs4Server(commandPort,
+            c => Assert.True(c.ClientClosed()), // the injector's "does 744 answer?" check
+            c =>
         {
             c.Expect(Ps4Command.Version, 0);
             c.Send(U32(3), "1.3"u8.ToArray());
@@ -42,15 +47,26 @@ public sealed partial class ApiHttpFileTests
             }
 
             c.Expect(Ps4Command.ConsoleEnd, 0);
-        });
+        },
+            c => // the connect near the end
+            {
+                c.Expect(Ps4Command.Version, 0);
+                c.Send(U32(3), "1.3"u8.ToArray());
+                c.Expect(Ps4Command.ConsoleEnd, 0);
+            }));
 
-        // The file's connect sends no IP, so it uses the saved one: the fake console.
-        using var factory = new ApiFactory().WithSettingsFile(
-            $$"""{ "consoleIp": "127.0.0.1", "commandPort": {{server.Port}} }""");
+        // The file's inject and connect send no IP, so they use the saved one: the fake console.
+        using var factory = new ApiFactory();
+        var payloadPath = Path.Combine(factory.TempDir, "ps4debug.bin");
+        File.WriteAllBytes(payloadPath, [1, 2, 3]);
+        factory.WithSettingsFile(JsonSerializer.Serialize(new
+        {
+            consoleIp = "127.0.0.1", commandPort, loaderPort = loader.Port, payloadPath,
+        }));
         using var http = factory.CreateClient();
 
         var requests = Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "api.http")));
-        Assert.True(requests.Count >= 11, $"api.http has only {requests.Count} requests");
+        Assert.True(requests.Count >= 13, $"api.http has only {requests.Count} requests");
 
         var replies = new Dictionary<string, JsonElement>();
         foreach (var r in requests)
@@ -63,14 +79,19 @@ public sealed partial class ApiHttpFileTests
             Assert.True(response.IsSuccessStatusCode, $"'{r.Title}' ({r.Method} {r.Url}) got {(int)response.StatusCode}: {text}");
             replies[r.Title] = JsonDocument.Parse(text).RootElement.Clone();
         }
+        Assert.NotNull(server);
         server.WaitForScript();
+        server.Dispose();
 
         // Spot checks that the samples show what their titles promise.
         JsonElement Reply(string titleStart) => replies.First(kv => kv.Key.StartsWith(titleStart)).Value;
 
         Assert.False(Reply("Connection state").GetProperty("connected").GetBoolean());
         Assert.Equal("saved settings", Reply("Connection state").GetProperty("defaultIpSource").GetString());
+        Assert.Equal(3, Reply("Inject the payload").GetProperty("bytesSent").GetInt64());
+        Assert.True(Reply("Inject the payload").GetProperty("status").GetProperty("connected").GetBoolean());
         Assert.Equal("1.3", Reply("Status again").GetProperty("version").GetString());
+        Assert.True(Reply("Connect when the payload").GetProperty("connected").GetBoolean());
 
         var processes = Reply("Every process");
         Assert.Equal(85, processes.GetProperty("suggestedPid").GetInt32());
