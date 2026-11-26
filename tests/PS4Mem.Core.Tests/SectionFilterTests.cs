@@ -108,4 +108,32 @@ public class SectionFilterTests
         Assert.Contains("3/6 sections selected", text);
         Assert.Equal(Sample.Length, text.Split('\n').Count(l => l.Contains("[maps] keep") || l.Contains("[maps] skip")));
     }
+
+    [Fact]
+    public void Unnamed_writable_maps_are_selected_by_default()
+    {
+        // Like Assassin's Creed III: the heap is many unnamed rw maps; read-only unnamed stays off.
+        MemoryMap[] maps =
+        [
+            new("", 0x2_0000_0000, 0x2_0800_0000, 0, RW),
+            new("", 0x2_0800_0000, 0x2_1000_0000, 0, RW),
+            new("", 0x3_0000_0000, 0x3_0010_0000, 0, R),
+            new("libSceNet.sprx", 0x8_0000_0000, 0x8_0010_0000, 0, RW),
+        ];
+
+        var result = new SectionFilter().Apply(maps);
+
+        Assert.Equal([true, true, false, false], result.Sections.Select(s => s.Selected));
+        Assert.Equal("unnamed (anonymous memory)", result.Sections[0].Reason);
+        Assert.Equal("(unnamed)", result.Sections[0].DisplayName);
+        Assert.Equal("libSceNet.sprx", result.Sections[3].DisplayName);
+    }
+
+    [Fact]
+    public void Unnamed_maps_can_be_left_out()
+    {
+        var filter = new SectionFilter(PS4MemSettings.Default with { SectionIncludeUnnamed = false });
+        var result = filter.Apply([new MemoryMap("", 0x1000, 0x2000, 0, RW)]);
+        Assert.False(result.Sections[0].Selected);
+    }
 }

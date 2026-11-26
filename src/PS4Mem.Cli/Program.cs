@@ -11,7 +11,7 @@ using PS4Mem.Core.Sections;
 //   --port <port>   ps4debug command port (default 744)
 // Commands:
 //   info            ps4debug version and the process list (read-only)
-//   sections        the game's memory maps, with the default scan selection (read-only)
+//   sections        choose a process, then its memory maps with the default scan selection (read-only)
 //                   --pid <pid> / --name <name>   pick the process yourself
 //                   --filter a,b,c                section name filter ("" = any name)
 //                   --include-readonly            also select read-only sections
@@ -140,16 +140,16 @@ static int Sections(PS4MemSettings settings, DebugLog log, int? pid, string? nam
         client.Connect();
 
         var processes = client.GetProcessList();
-        var pick = GameProcessPicker.Pick(processes, settings, pid, name, log);
+        var pick = ScanCommand.ChooseProcess(processes, settings, log, pid, name);
         if (pick.Process is not { } process)
         {
             client.Disconnect();
-            return Fail($"No game process picked: {pick.Reason} (run `info` to see the process list)");
+            return Fail($"No process chosen: {pick.Reason}");
         }
 
         var info = client.GetProcessInfo(process.Pid);
         var titleId = info.TitleId.Length > 0 ? info.TitleId : "unknown";
-        Console.WriteLine($"Process: {process.Name} (pid {process.Pid}, title ID {titleId}), picked because: {pick.Reason}");
+        Console.WriteLine($"Process: {process.Name} (pid {process.Pid}, title ID {titleId}), chosen by: {pick.Reason}");
 
         var maps = client.GetProcessMaps(process.Pid);
         client.Disconnect();
@@ -162,7 +162,8 @@ static int Sections(PS4MemSettings settings, DebugLog log, int? pid, string? nam
 
         var nameRule = settings.SectionNameFilter.Count == 0
             ? "any name"
-            : "name contains " + string.Join(", ", settings.SectionNameFilter);
+            : (settings.SectionIncludeUnnamed ? "unnamed, or " : "") +
+              "name contains " + string.Join(", ", settings.SectionNameFilter);
         var rule = selectAll ? "all readable sections"
             : nameRule + (settings.SectionRequireWritable ? ", writable" : ", read-only too");
         Console.WriteLine();
@@ -188,7 +189,7 @@ static void PrintSections(SectionSelection selection)
     {
         var s = selection.Sections[i];
         var mark = s.Selected ? "✓" : " ";
-        Console.WriteLine($"  {mark,1} {i,4}  {s.Name,-32}  {s.Start,12:X}  {s.End,12:X}  {SizeText(s.Size),10}  {s.Map.ProtText}");
+        Console.WriteLine($"  {mark,1} {i,4}  {s.DisplayName,-32}  {s.Start,12:X}  {s.End,12:X}  {SizeText(s.Size),10}  {s.Map.ProtText}");
     }
 }
 
@@ -201,9 +202,11 @@ static void PrintUsage(PS4MemSettings s)
 
         Commands:
           info      Show the ps4debug version and the process list (read-only).
-          sections  Pick the game process and list its memory sections; ✓ marks the ones
-                    a scan would use (read-only).
-          scan      Interactive scan for an exact 4-byte value (like money). After the first
+          sections  Choose a process (the likely game is suggested) and list its memory sections;
+                    ✓ marks the ones a scan would use (read-only).
+          scan      Interactive scan for an exact 4-byte value (like money). Lists the processes
+                    with the suggested game marked and asks which one to scan (or use --pid/--name).
+                    After the first
                     scan, type the new value for a next scan; `l` lists the first 20 results,
                     `w <n> <value>` writes result #n (the only command that writes), `new`
                     starts again, `q` quits. Ctrl+C cancels a running scan.

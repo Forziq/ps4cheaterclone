@@ -431,9 +431,15 @@ Both are **untested on the console**. G0/G1 must check that stop and resume work
 
 - **Build the list** from `CMD_PROC_MAPS`: keep entries with the read bit (`prot & 0x1`), skip
   `end <= start` (`PS4CheaterNeo/PS4CheaterNeo/common/SectionTool.cs:293-302`).
-- **Default checked**: writable as well, and name contains any of `anon`, `exe`, `Game`,
-  `dlmalloc`, `SmallBlockAllocator`. **This list comes from PROMPT §3.3 (Egor), not from
-  PS4Cheater**: there's no such list in `ref/PS4Cheater` (searched, `sections-and-pause.md` §1a).
+- **Default checked**: writable as well, and either **unnamed** or the name contains any of `anon`,
+  `exe`, `Game`, `dlmalloc`, `SmallBlockAllocator`. The name list is PS4 Mem's own default, not
+  PS4Cheater's: PS4Cheater has no default list and starts with nothing ticked
+  (`PS4Cheater/PS4_Cheater/ProcessManager.cs:433-500`, `mappedSection.Check = false`).
+- **Unnamed maps** are anonymous memory, where games keep most of their data. On the console,
+  Assassin's Creed III had 61 unnamed rw maps (2.9 GB) and only 9 MB of named, matching sections;
+  a name-only filter found nothing. So unnamed writable maps are checked by default.
+- The default is only a suggestion: the user can change the selection. The process picker is a
+  suggestion too: the `scan` command lists every process and asks.
 - For reference, PS4CheaterNeo **hides** sections matching
   `libSce,libc.prx,SceShell,SceLib,SceNp,SceVoice,SceFios,libkernel,SceVdec` by default
   (`PS4CheaterNeo/PS4CheaterNeo/Properties/Settings.settings:110-112`) and skips maps over 64 GB

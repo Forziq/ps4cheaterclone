@@ -88,4 +88,38 @@ public class GameProcessPickerTests
         GameProcessPicker.Pick([new("eboot.bin", 90)], log: new DebugLog(sw));
         Assert.Contains("[picker] Picked 'eboot.bin' pid 90 from 1 processes: name is eboot.bin", sw.ToString());
     }
+
+    // ---- Choose: the user's answer at the process prompt ----
+
+    private static readonly List<ProcessEntry> Ac3 =
+        SystemOnly.Append(new("ac3_engine_orbis_fn.elf", 85)).Append(new("SceShellCore", 86)).ToList();
+
+    [Fact]
+    public void Choose_empty_input_takes_the_suggestion()
+    {
+        var suggestion = GameProcessPicker.Pick(Ac3);
+        var pick = GameProcessPicker.Choose(Ac3, "  ", suggestion);
+        Assert.Equal(85, pick.Process?.Pid);
+        Assert.StartsWith("suggested (", pick.Reason);
+    }
+
+    [Fact]
+    public void Choose_a_pid_or_name_overrides_the_suggestion()
+    {
+        var suggestion = GameProcessPicker.Pick(Ac3);
+        Assert.Equal(50, GameProcessPicker.Choose(Ac3, "50", suggestion).Process?.Pid);
+        Assert.Equal("pid 50", GameProcessPicker.Choose(Ac3, "50", suggestion).Reason);
+        Assert.Equal(86, GameProcessPicker.Choose(Ac3, "ShellCore", suggestion).Process?.Pid);
+    }
+
+    [Fact]
+    public void Choose_explains_bad_answers()
+    {
+        var suggestion = GameProcessPicker.Pick(Ac3);
+        Assert.Equal("pid 999: no process with that pid", GameProcessPicker.Choose(Ac3, "999", suggestion).Reason);
+        var ambiguous = GameProcessPicker.Choose(Ac3, "Sce", suggestion);
+        Assert.Null(ambiguous.Process);
+        Assert.EndsWith("Type the pid.", ambiguous.Reason);
+        Assert.Null(GameProcessPicker.Choose(SystemOnly, "", GameProcessPicker.Pick(SystemOnly)).Process);
+    }
 }

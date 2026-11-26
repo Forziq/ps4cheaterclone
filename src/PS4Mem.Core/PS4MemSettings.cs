@@ -58,6 +58,12 @@ public sealed record PS4MemSettings
     public IReadOnlyList<string> SectionNameFilter { get; init; } =
         ["anon", "exe", "Game", "dlmalloc", "SmallBlockAllocator"];
 
+    /// <summary>
+    /// Also select writable maps that have no name. Games keep most of their data there (a real
+    /// game had 2.9 GB of unnamed heap and 9 MB of named sections), and no name filter can match them.
+    /// </summary>
+    public bool SectionIncludeUnnamed { get; init; } = true;
+
     /// <summary>Selected-by-default sections must also be writable (PROMPT.md §3.3).</summary>
     public bool SectionRequireWritable { get; init; } = true;
 

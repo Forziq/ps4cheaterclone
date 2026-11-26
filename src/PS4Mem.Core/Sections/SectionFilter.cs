@@ -10,6 +10,9 @@ public sealed record Section(MemoryMap Map, bool Selected, string Reason)
     public ulong Start => Map.Start;
     public ulong End => Map.End;
     public ulong Size => Map.Size;
+
+    /// <summary>The name, or "(unnamed)" for maps without one (the game's heap is usually unnamed).</summary>
+    public string DisplayName => Name.Length > 0 ? Name : "(unnamed)";
 }
 
 /// <summary>The sections list (readable maps, sorted by start) plus selected/total counts and bytes.</summary>
@@ -32,8 +35,9 @@ public sealed record SectionSelection(IReadOnlyList<Section> Sections, int Skipp
 /// <item>listed: readable maps (<c>prot &amp; 0x1</c>), like PS4Cheater (ProcessManager.cs:69);</item>
 /// <item>skipped: <c>end &lt;= start</c>, over <see cref="PS4MemSettings.MaxSectionBytes"/>, duplicates
 /// of the previous map (PS4CheaterNeo SectionTool.cs:296-311), and unreadable maps;</item>
-/// <item>selected: writable too (unless <see cref="RequireWritable"/> is off) and the name contains
-/// any of <see cref="NameFilter"/>, ignoring case. An empty filter selects every name.</item>
+/// <item>selected: writable too (unless <see cref="RequireWritable"/> is off) and either unnamed
+/// (anonymous memory, where games keep most of their data; <see cref="IncludeUnnamed"/>) or the
+/// name contains any of <see cref="NameFilter"/>, ignoring case. An empty filter selects every name.</item>
 /// </list>
 /// Every map is logged as kept or skipped, with the reason (category <c>maps</c>).
 /// </summary>
@@ -43,6 +47,7 @@ public sealed class SectionFilter
 
     public IReadOnlyList<string> NameFilter { get; init; }
     public bool RequireWritable { get; init; }
+    public bool IncludeUnnamed { get; init; }
     public ulong MaxSectionBytes { get; init; }
 
     public SectionFilter(PS4MemSettings? settings = null)
@@ -50,6 +55,7 @@ public sealed class SectionFilter
         settings ??= PS4MemSettings.Default;
         NameFilter = settings.SectionNameFilter;
         RequireWritable = settings.SectionRequireWritable;
+        IncludeUnnamed = settings.SectionIncludeUnnamed;
         MaxSectionBytes = settings.MaxSectionBytes;
     }
 
@@ -57,7 +63,7 @@ public sealed class SectionFilter
     {
         log ??= DebugLog.Disabled;
         var filterText = NameFilter.Count == 0 ? "(any name)" : string.Join(",", NameFilter);
-        log.Info(Cat, $"Filter: name contains {filterText}, writable required: {RequireWritable}");
+        log.Info(Cat, $"Filter: name contains {filterText}, unnamed included: {IncludeUnnamed}, writable required: {RequireWritable}");
 
         var sections = new List<Section>();
         var skipped = 0;
@@ -109,6 +115,9 @@ public sealed class SectionFilter
 
         if (NameFilter.Count == 0)
             return (true, "no name filter");
+
+        if (IncludeUnnamed && string.IsNullOrWhiteSpace(map.Name))
+            return (true, "unnamed (anonymous memory)");
 
         var match = NameFilter.FirstOrDefault(key =>
             key.Length > 0 && map.Name.Contains(key, StringComparison.OrdinalIgnoreCase));

@@ -30,16 +30,16 @@ internal static class ScanCommand
             client.Connect();
 
             var processes = client.GetProcessList();
-            var pick = GameProcessPicker.Pick(processes, settings, options.Pid, options.Name, log);
+            var pick = ChooseProcess(processes, settings, log, options.Pid, options.Name);
             if (pick.Process is not { } process)
             {
                 client.Disconnect();
-                return Program.Fail($"No game process picked: {pick.Reason} (run `info` to see the process list)");
+                return Program.Fail($"No process chosen: {pick.Reason}");
             }
 
             var info = client.GetProcessInfo(process.Pid);
             var titleId = info.TitleId.Length > 0 ? info.TitleId : "unknown";
-            Console.WriteLine($"Process: {process.Name} (pid {process.Pid}, title ID {titleId}), picked because: {pick.Reason}");
+            Console.WriteLine($"Process: {process.Name} (pid {process.Pid}, title ID {titleId}), chosen by: {pick.Reason}");
 
             var selection = new SectionFilter(settings).Apply(client.GetProcessMaps(process.Pid), log);
             if (options.SelectAll)
@@ -73,6 +73,41 @@ internal static class ScanCommand
         {
             log.Error("cli", "scan failed", e);
             return Program.Fail(e.Message);
+        }
+    }
+
+    /// <summary>
+    /// Lists every process with the suggested game marked, and lets the user choose: Return takes
+    /// the suggestion, or type a pid or a name. The picker only suggests. <c>--pid</c>/<c>--name</c>
+    /// skip the question. Used by <c>scan</c> and <c>sections</c>.
+    /// </summary>
+    internal static ProcessPick ChooseProcess(IReadOnlyList<ProcessEntry> processes, PS4MemSettings settings,
+        DebugLog log, int? pid = null, string? name = null)
+    {
+        if (pid is not null || name is not null)
+            return GameProcessPicker.Pick(processes, settings, pid, name, log);
+
+        var suggestion = GameProcessPicker.Pick(processes, settings, log: log);
+        Console.WriteLine($"{processes.Count} processes (→ = suggested):");
+        Console.WriteLine($"  {"PID",7}  NAME");
+        foreach (var p in processes.OrderBy(p => p.Pid))
+        {
+            var mark = p == suggestion.Process ? $"   → suggested: {suggestion.Reason}" : "";
+            Console.WriteLine($"  {p.Pid,7}  {p.Name}{mark}");
+        }
+        if (suggestion.Process is null)
+            Console.WriteLine($"No suggestion: {suggestion.Reason}");
+
+        while (true)
+        {
+            var hint = suggestion.Process is { } s ? $"Return = {s.Name} ({s.Pid}), or type a pid or name" : "type a pid or name";
+            Console.Write($"Process to scan ({hint})> ");
+            var input = Console.ReadLine();
+            if (input is null) return new ProcessPick(null, "no input");
+            log.Info("cli", $"process input: '{input}'");
+            var pick = GameProcessPicker.Choose(processes, input, suggestion, settings, log);
+            if (pick.Process is not null) return pick;
+            Console.WriteLine(pick.Reason);
         }
     }
 
@@ -156,7 +191,7 @@ internal static class ScanCommand
             {
                 if (!firstScan && s.Hits == 0) return; // next scans: only sections that still have hits
                 Console.Write("\r".PadRight(61) + "\r");
-                Console.WriteLine($"  {s.Section.Name,-32}  {s.Section.Start,12:X}  {Program.SizeText(s.Section.Size),10}  " +
+                Console.WriteLine($"  {s.Section.DisplayName,-32}  {s.Section.Start,12:X}  {Program.SizeText(s.Section.Size),10}  " +
                                   $"{s.Hits,9:N0} hits  {s.Elapsed.TotalMilliseconds,7:0} ms");
             },
         };
@@ -171,7 +206,7 @@ internal static class ScanCommand
         {
             client.ReadMemory(pid, results.Addresses[i], now);
             var current = BinaryPrimitives.ReadUInt32LittleEndian(now);
-            Console.WriteLine($"  {i,4}  {results.Addresses[i],12:X}  {results.Values[i],12}  {current,12}  {results.SectionOf(i).Name}");
+            Console.WriteLine($"  {i,4}  {results.Addresses[i],12:X}  {results.Values[i],12}  {current,12}  {results.SectionOf(i).DisplayName}");
         }
         if (results.Count > count)
             Console.WriteLine($"  ... and {results.Count - count:N0} more.");

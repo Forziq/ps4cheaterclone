@@ -12,17 +12,17 @@ Working now:
 
 - Connecting to the payload and reading its version.
 - Listing processes with the `info` command. Tested on a real console running ps4debug-NG v1.3, with 66 processes listed.
-- A process picker, which finds the game process.
+- A process picker. It lists every process and suggests the game, marked `→ suggested:`. You choose.
 - Section selection with the `sections` command. It lists the memory sections a scan will use, and only reads.
 
-The `scan` command is written and tested against a fake server. It hasn't run on a real console yet. It has:
+The `scan` command is tested against a fake server and has run on a real console. That first test found a problem with section selection. It's fixed now, and testing continues. The command has:
 
 - A first scan and next scans for 4-byte values.
 - Writing a value with `w`. This is the only command that writes to PS4 memory.
 
 Only exact 4-byte (32-bit) values work for now. Other value types and compare types come later.
 
-Next: test `scan` on a real console.
+Next: keep testing `scan` on a real console.
 
 ## Planned features
 
@@ -107,14 +107,18 @@ Phase 0 needs the payload loaded by hand. From Phase 1 the app will do this itse
 
    If `ps4ip.local` holds your address, you can leave out `--ip`.
 
-   The command picks the game process. It takes `eboot.bin`, or else a `.elf` that isn't a system process. It prints the process's title ID, then lists the readable memory sections with their name, start, end, size and protection. A ✓ marks the sections a scan will use. The last line gives the number of selected sections out of the total, and their size in bytes.
+   The command lists every process and asks which one to scan. The suggested game is marked `→ suggested:`, with the reason beside its name. Press Return to take the suggestion, or type a pid or a name instead. Not every game runs as `eboot.bin`. Assassin's Creed III, for example, runs as `ac3_engine_orbis_fn.elf`.
 
-   By default, a scan uses the writable sections whose name contains `anon`, `exe`, `Game`, `dlmalloc` or `SmallBlockAllocator`. The match ignores case. Memory maps are skipped and logged if their end is at or before their start, if they are over 64 GB, if they are duplicates, or if they can't be read.
+   Then it prints the process's title ID and lists the readable memory sections with their name, start, end, size and protection. Unnamed sections show as `(unnamed)`. A ✓ marks the sections a scan will use. The last line gives the number of selected sections out of the total, and their size in bytes.
+
+   By default, a scan uses writable sections that are unnamed, or whose name contains `anon`, `exe`, `Game`, `dlmalloc` or `SmallBlockAllocator`. The match ignores case. Unnamed sections are anonymous memory, and games keep most of their data there. In Assassin's Creed III, about 2.9 GB is unnamed heap, against about 9 MB of named sections. The default selection is only a suggestion. The options below change it.
+
+   Memory maps are skipped and logged if their end is at or before their start, if they are over 64 GB, if they are duplicates, or if they can't be read.
 
    Options:
 
-   - `--pid <pid>` picks the process by its ID.
-   - `--name <name>` picks the process by name. Use the exact name or a part that matches only one process.
+   - `--pid <pid>` picks the process by its ID and skips the question.
+   - `--name <name>` picks the process by name and skips the question. Use the exact name or a part that matches only one process.
    - `--filter a,b,c` sets the section name filter, as a comma-separated list. Use `--filter ""` to match any name.
    - `--include-readonly` also selects read-only sections.
    - `--all` selects every readable section. It ignores the name filter and the writable rule.
@@ -127,7 +131,7 @@ Phase 0 needs the payload loaded by hand. From Phase 1 the app will do this itse
    dotnet run --project src/PS4Mem.Cli -- scan --ip $PS4_IP --method local
    ```
 
-   `scan` is interactive. It picks the game process and the default sections, the same way `sections` does, then asks for a 4-byte value. The first value you type runs a first scan. After that, typing a new value runs a next scan on the previous results.
+   `scan` is interactive. It asks which process to scan, as `sections` does, unless you pass `--pid` or `--name`. Then it uses the default sections and asks for a 4-byte value. The first value you type runs a first scan. After that, typing a new value runs a next scan on the previous results.
 
    At the prompt:
 
@@ -145,6 +149,8 @@ Phase 0 needs the payload loaded by hand. From Phase 1 the app will do this itse
    - `--pid`, `--name`, `--filter`, `--include-readonly` and `--all` work the same as they do for `sections`.
 
    Every scan prints and logs the hit count for each section. Every write is logged with the old and new bytes (with `--debug`).
+
+   Speed depends on the method and the network. A first scan of about 3 GB with `local` can take 10 to 15 minutes on Wi-Fi, at about 4 MB/s. With `console`, only the matches cross the network. A wired connection is faster.
 
 To write a debug log without the flag, set `PS4MEM_DEBUG=1`. Logs go to `logs/`, which is git-ignored. Attach the log when you report a problem.
 
@@ -175,7 +181,7 @@ All defaults are in `src/PS4Mem.Core/PS4MemSettings.cs`, and you can override ea
 - Payload path: `payloads/ps4debug-ng_v1.3.4_release_2026-11-05.bin`.
 - Scan method: `local`.
 - Read chunk size: 32 MB.
-- Section name filter: `anon`, `exe`, `Game`, `dlmalloc` and `SmallBlockAllocator`.
+- Section name filter: `anon`, `exe`, `Game`, `dlmalloc` and `SmallBlockAllocator`. Writable unnamed sections are selected too.
 - Connect timeout: 5 seconds. Reads have no timeout, because scans can take minutes.
 
 ### Layout
