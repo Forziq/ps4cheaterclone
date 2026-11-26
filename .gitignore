@@ -16,8 +16,19 @@ payloads/*.bin
 *.spill
 *.snapshot
 .env*
+ps4ip.local
 .DS_Store
 .claude/settings.local.json
 
 # Debug logs (PS4MEM_DEBUG / --debug)
 logs/
+
+# Local Claude Code setup: never on GitHub (only the project's own files go there)
+.claude/
+claude-setup/
+CLAUDE.md
+PROMPT.md
+TASKS.md
+progress.md
+manual.md
+docs/research/

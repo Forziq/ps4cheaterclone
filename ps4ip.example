@@ -1,0 +1,2 @@
+# Copy to ps4ip.local and set your PS4's IP. ps4ip.local is git-ignored.
+PS4_IP=192.168.x.x
