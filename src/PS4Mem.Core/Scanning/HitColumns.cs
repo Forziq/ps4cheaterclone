@@ -54,7 +54,7 @@ internal sealed unsafe class FileHitColumns : HitColumns
 {
     private readonly ScanStorage _storage;
     private readonly string _addressFile, _valueFile;
-    private readonly Mapped _addresses, _values;
+    private readonly MappedFile _addresses, _values;
     private bool _disposed;
 
     public FileHitColumns(ScanStorage storage, string addressFile, string valueFile, long count, int valueSize)
@@ -63,10 +63,10 @@ internal sealed unsafe class FileHitColumns : HitColumns
         _storage = storage;
         _addressFile = addressFile;
         _valueFile = valueFile;
-        _addresses = new Mapped(addressFile);
+        _addresses = new MappedFile(addressFile);
         try
         {
-            _values = new Mapped(valueFile);
+            _values = new MappedFile(valueFile);
         }
         catch
         {
@@ -104,29 +104,29 @@ internal sealed unsafe class FileHitColumns : HitColumns
         _storage.Delete(_addressFile);
         _storage.Delete(_valueFile);
     }
+}
 
-    /// <summary>A read-only memory map of a whole file and a pointer to its first byte.</summary>
-    private sealed class Mapped : IDisposable
+/// <summary>A read-only memory map of a whole file and a pointer to its first byte.</summary>
+internal sealed unsafe class MappedFile : IDisposable
+{
+    private readonly MemoryMappedFile _file;
+    private readonly MemoryMappedViewAccessor _view;
+
+    public MappedFile(string path)
     {
-        private readonly MemoryMappedFile _file;
-        private readonly MemoryMappedViewAccessor _view;
+        _file = MemoryMappedFile.CreateFromFile(path, FileMode.Open, null, 0, MemoryMappedFileAccess.Read);
+        _view = _file.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read);
+        byte* p = null;
+        _view.SafeMemoryMappedViewHandle.AcquirePointer(ref p);
+        Pointer = p + _view.PointerOffset;
+    }
 
-        public Mapped(string path)
-        {
-            _file = MemoryMappedFile.CreateFromFile(path, FileMode.Open, null, 0, MemoryMappedFileAccess.Read);
-            _view = _file.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read);
-            byte* p = null;
-            _view.SafeMemoryMappedViewHandle.AcquirePointer(ref p);
-            Pointer = p + _view.PointerOffset;
-        }
+    public byte* Pointer { get; }
 
-        public byte* Pointer { get; }
-
-        public void Dispose()
-        {
-            _view.SafeMemoryMappedViewHandle.ReleasePointer();
-            _view.Dispose();
-            _file.Dispose();
-        }
+    public void Dispose()
+    {
+        _view.SafeMemoryMappedViewHandle.ReleasePointer();
+        _view.Dispose();
+        _file.Dispose();
     }
 }

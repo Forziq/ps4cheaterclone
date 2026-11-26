@@ -11,7 +11,8 @@ namespace PS4Mem.Cli;
 /// <summary>
 /// Interactive <c>scan</c> command (T0.4): pick the process, show the section summary, choose
 /// local or console, enter a value, then loop: a new value = next scan, <c>l</c> lists results,
-/// <c>w &lt;n&gt; &lt;value&gt;</c> writes (the only way this command writes), <c>new</c> starts over,
+/// <c>w &lt;n&gt; &lt;value&gt;</c> writes (the only way this command writes), <c>u</c> undoes the last
+/// scan, <c>new</c> starts over,
 /// <c>q</c> quits. Ctrl+C cancels a running scan.
 /// </summary>
 internal static class ScanCommand
@@ -66,7 +67,7 @@ internal static class ScanCommand
             Console.WriteLine($"Scan: {(scanOptions.Method == ScanMethod.Local ? "local (on the Mac)" : "console (on the PS4)")}, " +
                               $"exact 4-byte value, alignment {scanOptions.Alignment}. Ctrl+C cancels a scan.");
 
-            Loop(client, engine, editor, process.Pid, sections, scanOptions, cancelHandler, log);
+            Loop(client, engine, editor, process.Pid, sections, scanOptions, cancelHandler, log, settings.ScanUndoLevels);
             client.Disconnect();
             return 0;
         }
@@ -130,27 +131,16 @@ internal static class ScanCommand
     }
 
     private static void Loop(PS4DebugClient client, ScanEngine engine, MemoryEditor editor, int pid,
-        List<Section> sections, ScanOptions scanOptions, ScanCancelHandler cancel, DebugLog log)
+        List<Section> sections, ScanOptions scanOptions, ScanCancelHandler cancel, DebugLog log, int undoLevels)
     {
-        ScanResults? results = null;
-        try
-        {
-            Loop(client, engine, editor, pid, sections, scanOptions, cancel, log, ref results);
-        }
-        finally
-        {
-            results?.Dispose(); // frees memory and deletes spilled files
-        }
-    }
-
-    private static void Loop(PS4DebugClient client, ScanEngine engine, MemoryEditor editor, int pid,
-        List<Section> sections, ScanOptions scanOptions, ScanCancelHandler cancel, DebugLog log, ref ScanResults? results)
-    {
+        using var history = new ScanHistory(undoLevels); // disposing frees memory and deletes spilled files
         Console.WriteLine();
-        Console.WriteLine("Enter a value to scan for (decimal, or 0x hex). Commands: l = list, w <n> <value> = write, new, q = quit.");
+        Console.WriteLine("Enter a value to scan for (decimal, or 0x hex). " +
+                          "Commands: l = list, w <n> <value> = write, u = undo last scan, new, q = quit.");
 
         while (true)
         {
+            var results = history.Current;
             Console.Write(results is null ? "first scan value> " : $"[{results.Count:N0} results] next value> ");
             var line = Console.ReadLine();
             if (line is null) return; // end of input
@@ -163,13 +153,21 @@ internal static class ScanCommand
                 case "q" or "quit" or "exit":
                     return;
                 case "new":
-                    results?.Dispose();
-                    results = null;
+                    history.Clear();
                     Console.WriteLine("Results cleared. Enter a value for a new first scan.");
                     continue;
                 case "l" or "list":
                     if (results is null) Console.WriteLine("No results yet.");
                     else List(client, pid, results);
+                    continue;
+                case "u" or "undo":
+                    if (!history.Undo())
+                    {
+                        Console.WriteLine("Nothing to undo.");
+                        continue;
+                    }
+                    log.Info("cli", $"undo: back to scan #{history.Current!.ScanNumber}, {history.Current.Count} results");
+                    Console.WriteLine($"Back to scan #{history.Current.ScanNumber}: {history.Current.Count:N0} results.");
                     continue;
                 case "w" or "write":
                     Write(editor, pid, results, parts);
@@ -178,7 +176,7 @@ internal static class ScanCommand
 
             if (!TryParseU32(parts[0], out var value))
             {
-                Console.WriteLine($"'{parts[0]}' isn't a 4-byte value or a command (l, w <n> <value>, new, q).");
+                Console.WriteLine($"'{parts[0]}' isn't a 4-byte value or a command (l, w <n> <value>, u, new, q).");
                 continue;
             }
 
@@ -193,7 +191,7 @@ internal static class ScanCommand
                 continue;
             }
 
-            results?.Dispose();
+            history.Push(next);
             results = next;
             Console.WriteLine();
             var withHits = results.Sections.Count(s => s.Hits > 0);

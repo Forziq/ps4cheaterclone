@@ -270,8 +270,9 @@ static void PrintUsage(PS4MemSettings s)
                     game and asks which process to scan: Return takes it, `list` shows every
                     process, or type a pid or name (or use --pid/--name). After the first
                     scan, type the new value for a next scan; `l` lists the first 20 results,
-                    `w <n> <value>` writes result #n (the only command that writes), `new`
-                    starts again, `q` quits. Ctrl+C cancels a running scan.
+                    `w <n> <value>` writes result #n (the only command that writes), `u`
+                    undoes the last scan, `new` starts again, `q` quits. Ctrl+C cancels a
+                    running scan. Big result sets are kept on disk and deleted on exit.
 
         Sections and scan options:
           --pid <pid>         Use this process instead of the auto-picked game

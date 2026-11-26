@@ -87,6 +87,8 @@ public sealed class ScanEngine
         if (!query.Compare.AllowedOnFirstScan())
             throw new ArgumentException($"'{query.Compare.ShortName()}' needs a previous scan: use it for a next scan.");
         var size = query.ValueSize ?? throw new ArgumentException($"'{query}' has no value size.");
+        if (query.Compare == ScanCompare.UnknownInitial)
+            return SnapshotScan(pid, sections, query, options, cancel);
 
         var scanner = _local;
         if (options.Method == ScanMethod.Console)
@@ -155,6 +157,8 @@ public sealed class ScanEngine
                                         "start a new scan to change the type.");
         var size = query.ValueSize ?? previous.ValueSize;
         var matcher = ValueMatcher.Create(query, size, _settings.UnknownInitialSkipZeros);
+        if (previous.Columns is SnapshotHitColumns snapshot)
+            return NextFromSnapshot(previous, snapshot, query, matcher, options, cancel);
 
         var pid = previous.Pid;
         var maxBatch = (ulong)Math.Max(size, _settings.ScanChunkBytes);
@@ -222,6 +226,145 @@ public sealed class ScanEngine
 
         _log.Info(Cat, $"Next scan read {checkedCount} results in {reads} reads");
         return Finish(pid, previous.ScanNumber + 1, "local", query, hits, stats, watch.Elapsed);
+    }
+
+    /// <summary>
+    /// Unknown initial value: reads every section to the Mac (never on the console: the values
+    /// themselves are the result) and keeps the bytes as a snapshot, on disk with a storage.
+    /// Results are the candidate values in it; nothing is stored per result.
+    /// </summary>
+    private ScanResults SnapshotScan(int pid, IEnumerable<Section> sections, ScanQuery query,
+        ScanOptions options, CancellationToken cancel)
+    {
+        if (options.Method == ScanMethod.Console)
+            _log.Info(Cat, "Unknown initial value always reads memory to the Mac (snapshot); not using console scan");
+        var alignment = EffectiveAlignment(query.Type, options.Alignment ?? _settings.ScanAlignment);
+        var candidate = ValueMatcher.Create(query, query.ValueSize!.Value, _settings.UnknownInitialSkipZeros);
+        var size = candidate.Size;
+        var list = sections.OrderBy(s => s.Start).ToList();
+        var totalBytes = list.Aggregate(0L, (sum, s) => sum + (long)s.Size);
+        _log.Info(Cat, $"First scan (snapshot): pid {pid}, {query}, alignment {alignment}, {list.Count} sections, " +
+                       $"{totalBytes} bytes, skip zeros {_settings.UnknownInitialSkipZeros}, " +
+                       (_storage is null ? "in memory" : $"to {_storage.SessionDirectory}"));
+
+        var watch = Stopwatch.StartNew();
+        using var builder = new SnapshotBuilder(_storage, totalBytes, alignment, candidate);
+        var stats = new List<SectionScanStats>(list.Count);
+        long done = 0, count = 0;
+        try
+        {
+            foreach (var section in list)
+            {
+                var sectionWatch = Stopwatch.StartNew();
+                var first = count;
+                builder.BeginSection(section);
+                ReadSection(pid, section, size, cancel, (data, own, address) =>
+                {
+                    count += builder.AddChunk(data, own, address);
+                    done += own;
+                    options.Progress?.Invoke(new ScanProgress(section.Name, done, totalBytes, count));
+                });
+                stats.Add(SectionFinished(new SectionScanStats(section, first, count - first, sectionWatch.Elapsed), options));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _log.Warn(Cat, $"Snapshot cancelled after {done}/{totalBytes} bytes");
+            throw;
+        }
+
+        var columns = builder.Complete();
+        _log.Info(Cat, $"Scan #1 (snapshot) done: {columns.Count} results in {stats.Count(s => s.Hits > 0)}/{stats.Count} " +
+                       $"sections, {watch.Elapsed.TotalMilliseconds:0} ms{(columns.OnDisk ? " (snapshot on disk)" : "")}");
+        return new ScanResults(columns)
+        {
+            Pid = pid,
+            ScanNumber = 1,
+            Method = "local",
+            Query = query,
+            Sections = stats,
+            Elapsed = watch.Elapsed,
+        };
+    }
+
+    /// <summary>
+    /// Next scan after unknown initial value: reads each section again and compares every
+    /// candidate with its snapshot bytes. Progress is in bytes.
+    /// </summary>
+    private ScanResults NextFromSnapshot(ScanResults previous, SnapshotHitColumns snapshot, ScanQuery query,
+        ValueMatcher matcher, ScanOptions options, CancellationToken cancel)
+    {
+        var pid = previous.Pid;
+        var size = snapshot.ValueSize;
+        var alignment = snapshot.Alignment;
+        var totalBytes = snapshot.Sections.Aggregate(0L, (sum, s) => sum + (long)s.Section.Size);
+        _log.Info(Cat, $"Next scan #{previous.ScanNumber + 1}: pid {pid}, {query}, against the snapshot of " +
+                       $"{snapshot.Sections.Count} sections ({previous.Count} candidates, {totalBytes} bytes)");
+
+        var watch = Stopwatch.StartNew();
+        using var hits = NewBuffer(size);
+        var stats = new List<SectionScanStats>(snapshot.Sections.Count);
+        long done = 0;
+        try
+        {
+            foreach (var s in snapshot.Sections)
+            {
+                var sectionWatch = Stopwatch.StartNew();
+                var first = hits.Count;
+                ReadSection(pid, s.Section, size, cancel, (data, own, address) =>
+                {
+                    var offset = (long)(address - s.Section.Start);
+                    var start = (int)((ulong)(alignment - (int)(address % (ulong)alignment)) % (ulong)alignment);
+                    for (var o = start; o < own && o + size <= data.Length; o += alignment)
+                    {
+                        var before = snapshot.Data.Slice(s.DataOffset + offset + o, size);
+                        if (!snapshot.Candidate.IsMatch(before, default)) continue;
+                        var current = data.Slice(o, size);
+                        if (matcher.IsMatch(current, before))
+                            hits.Add(address + (ulong)o, current);
+                    }
+                    done += own;
+                    options.Progress?.Invoke(new ScanProgress(s.Section.Name, done, totalBytes, hits.Count));
+                });
+                stats.Add(SectionFinished(new SectionScanStats(s.Section, first, hits.Count - first, sectionWatch.Elapsed), options));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _log.Warn(Cat, $"Next scan cancelled after {done}/{totalBytes} bytes, {hits.Count} hits so far");
+            throw;
+        }
+        return Finish(pid, previous.ScanNumber + 1, "local", query, hits, stats, watch.Elapsed);
+    }
+
+    private delegate void ChunkHandler(ReadOnlySpan<byte> data, int own, ulong address);
+
+    /// <summary>
+    /// Reads a section in <see cref="PS4MemSettings.ScanChunkBytes"/> chunks, each with
+    /// (<paramref name="valueSize"/> - 1) extra bytes clamped to the section end, like
+    /// <see cref="LocalSectionScanner"/>, and hands each chunk with the number of bytes it owns.
+    /// </summary>
+    private void ReadSection(int pid, Section section, int valueSize, CancellationToken cancel, ChunkHandler chunk)
+    {
+        var chunkBytes = Math.Max(valueSize, _settings.ScanChunkBytes);
+        var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(chunkBytes + valueSize - 1);
+        try
+        {
+            for (var pos = section.Start; pos < section.End;)
+            {
+                cancel.ThrowIfCancellationRequested();
+                var left = section.End - pos;
+                var own = (int)Math.Min((ulong)chunkBytes, left);
+                var read = (int)Math.Min((ulong)own + (ulong)valueSize - 1, left);
+                _memory.ReadMemory(pid, pos, buffer.AsMemory(0, read), cancel);
+                chunk(buffer.AsSpan(0, read), own, pos);
+                pos += (ulong)own;
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private ScanHitBuffer NewBuffer(int valueSize, int capacity = 1024) =>

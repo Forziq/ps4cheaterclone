@@ -50,6 +50,21 @@ public sealed class ScanResults : IDisposable
 
     public bool IsDisposed => _disposed;
 
+    /// <summary>
+    /// True for an unknown initial value scan: the results are every value in a snapshot of the
+    /// sections (see <see cref="SnapshotHitColumns"/>), and the next scan re-reads whole sections.
+    /// </summary>
+    public bool IsSnapshot => _hits is SnapshotHitColumns;
+
+    internal HitColumns Columns
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _hits;
+        }
+    }
+
     public ulong AddressAt(long index)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -102,8 +117,8 @@ public sealed class ScanResults : IDisposable
 }
 
 /// <summary>
-/// Progress of a running scan. First scan: <see cref="Done"/>/<see cref="Total"/> are bytes;
-/// next scan: previous results checked.
+/// Progress of a running scan. First scan and the next scan after unknown initial value:
+/// <see cref="Done"/>/<see cref="Total"/> are bytes; other next scans: previous results checked.
 /// </summary>
 public sealed record ScanProgress(string Section, long Done, long Total, long Hits)
 {
