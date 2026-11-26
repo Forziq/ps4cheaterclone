@@ -49,7 +49,7 @@ final class AppModel {
          statusPollInterval: TimeInterval = 3) {
         self.client = client
         self.backend = backend ?? BackendProcess(client: client) {
-            try .development(apiURL: client.baseURL)
+            try .automatic(apiURL: client.baseURL)
         }
         self.inject = InjectModel(client: client)
         self.processes = ProcessModel(client: client)

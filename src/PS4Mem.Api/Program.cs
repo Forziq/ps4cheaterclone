@@ -12,13 +12,23 @@ using PS4Mem.Core.Settings;
 // Options (command line or environment):
 //   --urls http://127.0.0.1:<port>      listen address; loopback only (default PS4MemSettings.ApiUrl)
 //   --PS4Mem:SettingsPath <file>        settings file (default ~/Library/Application Support/PS4Mem/settings.json)
+//   --PS4Mem:LogDirectory <folder>      debug log folder (default PS4MemSettings.LogDirectory, logs/ in the repo)
+//   --PS4Mem:ParentPid <pid>            stop when that process exits (PS4Mem.app passes its own pid)
 
 var builder = WebApplication.CreateBuilder(args);
-var defaults = PS4MemSettings.Default;
+var defaults = PS4MemSettings.Default with
+{
+    LogDirectory = builder.Configuration["PS4Mem:LogDirectory"] is { Length: > 0 } logDirectory
+        ? logDirectory
+        : PS4MemSettings.Default.LogDirectory,
+};
 
 var urls = builder.Configuration["urls"] ?? defaults.ApiUrl;
 LoopbackGuard.EnsureLoopback(urls);
 builder.WebHost.UseUrls(urls);
+
+// One line per request (the app polls the status every few seconds) would bury everything else.
+builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
 
 builder.Services.ConfigureHttpJsonOptions(o =>
 {
@@ -44,6 +54,12 @@ builder.Services.AddSingleton(sp => new CheatStore(
 builder.Services.AddSingleton(sp => new CheatLocks(sp.GetRequiredService<PS4MemSettings>(), sp.GetRequiredService<DebugLogSwitch>()));
 builder.Services.AddSingleton(sp => new CheatList(sp.GetRequiredService<CheatStore>(),
     sp.GetRequiredService<CheatLocks>(), sp.GetRequiredService<DebugLogSwitch>()));
+// Started by PS4Mem.app: stop when the app is gone, even if it crashed or was force-quit.
+if (int.TryParse(builder.Configuration[ParentWatch.ConfigKey], out var parentPid) && parentPid > 0)
+{
+    builder.Services.AddHostedService(sp => new ParentWatch(parentPid, TimeSpan.FromSeconds(1),
+        sp.GetRequiredService<IHostApplicationLifetime>(), sp.GetRequiredService<ILogger<ParentWatch>>()));
+}
 
 var app = builder.Build();
 

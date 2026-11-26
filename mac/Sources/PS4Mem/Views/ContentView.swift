@@ -92,7 +92,7 @@ struct BackendBanner: View {
         case .idle, .checking:
             banner(Text("Looking for the backend…"), busy: true)
         case .starting:
-            banner(Text("Starting the backend (the first build can take a minute)…"), busy: true)
+            banner(Text("Starting the backend (a first `dotnet run` build can take a minute)…"), busy: true)
         case .failed(let message):
             banner(Text(message).foregroundStyle(.red), busy: false) {
                 Button("Retry") { Task { await backend.start() } }

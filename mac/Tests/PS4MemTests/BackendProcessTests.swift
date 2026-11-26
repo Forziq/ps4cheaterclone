@@ -139,7 +139,67 @@ final class BackendProcessTests: XCTestCase {
         XCTAssertEqual(command.directory.path, repo.path)
     }
 
+    // MARK: The backend inside PS4Mem.app
+
+    func testBundledCommandRunsTheBackendInResources() throws {
+        let resources = try makeFakeResources(withBackend: true)
+        defer { try? FileManager.default.removeItem(at: resources) }
+        let logs = URL(fileURLWithPath: "/tmp/ps4mem-logs")
+
+        let command = try XCTUnwrap(BackendProcess.LaunchCommand.bundled(
+            apiURL: URL(string: "http://127.0.0.1:5080")!, resources: resources, logs: logs, parentPid: 4321))
+        let backend = resources.appendingPathComponent("backend")
+        XCTAssertEqual(command.executable.path, backend.appendingPathComponent("PS4Mem.Api").path)
+        XCTAssertEqual(command.arguments, ["--urls", "http://127.0.0.1:5080",
+                                           "--PS4Mem:LogDirectory", "/tmp/ps4mem-logs",
+                                           "--PS4Mem:ParentPid", "4321"])
+        XCTAssertEqual(command.directory.path, backend.path)
+        XCTAssertEqual(command.outputLog?.path, "/tmp/ps4mem-logs/backend.log")
+    }
+
+    func testNoBundledCommandWithoutABackend() throws {
+        let resources = try makeFakeResources(withBackend: false)
+        defer { try? FileManager.default.removeItem(at: resources) }
+        XCTAssertNil(BackendProcess.LaunchCommand.bundled(apiURL: URL(string: "http://127.0.0.1:5080")!,
+                                                          resources: resources))
+        XCTAssertNil(BackendProcess.LaunchCommand.bundled(apiURL: URL(string: "http://127.0.0.1:5080")!,
+                                                          resources: nil))
+    }
+
+    func testLogFolderIsInLibraryLogs() {
+        XCTAssertTrue(BackendProcess.LaunchCommand.defaultLogFolder.path.hasSuffix("/Library/Logs/PS4Mem"))
+    }
+
+    func testOutputGoesToTheLogFileAndErrorsPointThere() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("ps4mem-out-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let logFile = folder.appendingPathComponent("logs/backend.log") // the logs folder doesn't exist yet
+        StubURLProtocol.handler = { _ in throw URLError(.cannotConnectToHost) }
+        var command = shell("echo hello from the backend; echo oops >&2; exit 4")
+        command.outputLog = logFile
+        let backend = BackendProcess(client: stubClient(), launchCommand: { command }, pollInterval: 0.05)
+
+        await backend.start()
+
+        XCTAssertEqual(backend.state, .failed("The backend stopped (exit code 4). See \(logFile.path) for its output."))
+        let text = try String(contentsOf: logFile, encoding: .utf8)
+        XCTAssertTrue(text.contains("hello from the backend"), text)
+        XCTAssertTrue(text.contains("oops"), text)
+    }
+
     // MARK: Helpers
+
+    /// A fake `Contents/Resources`, with an executable `backend/PS4Mem.Api` if asked.
+    private func makeFakeResources(withBackend: Bool) throws -> URL {
+        let resources = FileManager.default.temporaryDirectory.appendingPathComponent("ps4mem-res-\(UUID())")
+        let backend = resources.appendingPathComponent("backend")
+        try FileManager.default.createDirectory(at: backend, withIntermediateDirectories: true)
+        if withBackend {
+            FileManager.default.createFile(atPath: backend.appendingPathComponent("PS4Mem.Api").path,
+                                           contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755])
+        }
+        return resources
+    }
 
     private func makeFakeRepo() throws -> URL {
         let repo = FileManager.default.temporaryDirectory.appendingPathComponent("ps4mem-repo-\(UUID())")

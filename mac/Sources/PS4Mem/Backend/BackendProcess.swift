@@ -5,8 +5,9 @@ import Observation
 ///
 /// - If an API already answers on the port (e.g. you started it yourself with `dotnet run`), the app
 ///   uses that one and leaves it running when the app quits.
-/// - Otherwise it starts `dotnet run --project src/PS4Mem.Api` in the repo folder (development) and
-///   waits until `GET /api/status` answers. When the app quits, it stops that process and its children.
+/// - Otherwise it starts one and waits until `GET /api/status` answers: the backend inside PS4Mem.app
+///   (`Contents/Resources/backend`), or `dotnet run --project src/PS4Mem.Api` in the repo folder during
+///   development. When the app quits, it stops that process and its children.
 @MainActor
 @Observable
 final class BackendProcess {
@@ -26,6 +27,14 @@ final class BackendProcess {
         var executable: URL
         var arguments: [String]
         var directory: URL
+        /// Where the backend's output goes (replaced at each start). Nil: inherited, so it shows in the
+        /// terminal that ran ./run.sh.
+        var outputLog: URL? = nil
+
+        /// Where to look when the backend fails.
+        var outputHint: String {
+            outputLog.map { "See \($0.path) for its output." } ?? "See the terminal for its output."
+        }
     }
 
     private(set) var state: State = .idle
@@ -35,6 +44,8 @@ final class BackendProcess {
     private let startTimeout: TimeInterval
     private let pollInterval: TimeInterval
     private var process: Process?
+    /// Where the running (or last) backend writes its output, for the error messages.
+    private var outputHint = "See the terminal for its output."
 
     /// - Parameters:
     ///   - launchCommand: builds the command when it's needed (it can fail, e.g. no dotnet found).
@@ -79,11 +90,25 @@ final class BackendProcess {
         process.executableURL = command.executable
         process.arguments = command.arguments
         process.currentDirectoryURL = command.directory
-        // stdout and stderr are inherited, so the backend's log shows in the terminal that ran ./run.sh.
+        outputHint = command.outputHint
+        var output: FileHandle?
+        if let outputLog = command.outputLog {
+            // Started from Finder there's no terminal, so the backend's output goes to a file.
+            do {
+                output = try Self.openOutputLog(outputLog)
+                process.standardOutput = output
+                process.standardError = output
+            } catch {
+                log("can't write \(outputLog.path) (\(error.localizedDescription)); backend output is lost")
+            }
+        }
+        // Otherwise stdout and stderr are inherited, so the backend's log shows in the terminal that ran ./run.sh.
         process.terminationHandler = { [weak self] finished in
             let code = finished.terminationStatus
             Task { @MainActor in self?.processEnded(finished, code: code) }
         }
+        // The backend has its own copy of the log file now; this one isn't needed.
+        defer { try? output?.close() }
         do {
             try process.run()
         } catch {
@@ -105,7 +130,7 @@ final class BackendProcess {
             try? await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
         }
         stop()
-        state = .failed("The backend didn't answer within \(Int(startTimeout)) s. See the terminal for its output.")
+        state = .failed("The backend didn't answer within \(Int(startTimeout)) s. \(outputHint)")
     }
 
     /// Stops the backend if this app started it (it and every child process, e.g. the API under `dotnet run`).
@@ -125,7 +150,7 @@ final class BackendProcess {
     private func processEnded(_ finished: Process, code: Int32) {
         guard finished === process else { return } // stop() already handled it
         process = nil
-        state = .failed("The backend stopped (exit code \(code)). See the terminal for its output.")
+        state = .failed("The backend stopped (exit code \(code)). \(outputHint)")
         log("backend exited with code \(code)")
     }
 
@@ -139,8 +164,52 @@ final class BackendProcess {
         }
     }
 
+    /// An empty `file` (its folder is created if needed), open for writing.
+    private static func openOutputLog(_ file: URL) throws -> FileHandle {
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard FileManager.default.createFile(atPath: file.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: file.path])
+        }
+        return try FileHandle(forWritingTo: file)
+    }
+
     private func log(_ message: String) {
         FileHandle.standardError.write(Data("[app] \(message)\n".utf8))
+    }
+}
+
+// MARK: - Launch commands
+
+extension BackendProcess.LaunchCommand {
+    /// The backend inside PS4Mem.app if there is one, otherwise the development command.
+    static func automatic(apiURL: URL) throws -> Self {
+        if let bundled = bundled(apiURL: apiURL) { return bundled }
+        return try development(apiURL: apiURL)
+    }
+
+    /// The self-contained backend that scripts/build-app.sh puts in PS4Mem.app
+    /// (`Contents/Resources/backend/PS4Mem.Api`). No .NET install is needed to run it.
+    /// Nil when there's none, e.g. when the app runs from `swift build`.
+    ///
+    /// It runs in its own folder (so the bundled payload in `backend/payloads` is found), writes its
+    /// output and debug logs to `logs` (not into the app), and stops by itself when `parentPid` exits.
+    static func bundled(apiURL: URL, resources: URL? = Bundle.main.resourceURL,
+                        logs: URL = defaultLogFolder, parentPid: Int32 = getpid()) -> Self? {
+        guard let backend = resources?.appendingPathComponent("backend") else { return nil }
+        let executable = backend.appendingPathComponent("PS4Mem.Api")
+        guard FileManager.default.isExecutableFile(atPath: executable.path) else { return nil }
+        return .init(executable: executable,
+                     arguments: ["--urls", apiURL.absoluteString,
+                                 "--PS4Mem:LogDirectory", logs.path,
+                                 "--PS4Mem:ParentPid", String(parentPid)],
+                     directory: backend,
+                     outputLog: logs.appendingPathComponent("backend.log"))
+    }
+
+    /// `~/Library/Logs/PS4Mem`: the bundled backend's output and debug logs (Console.app shows it too).
+    static var defaultLogFolder: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/PS4Mem", isDirectory: true)
     }
 }
 

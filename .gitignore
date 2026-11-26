@@ -37,3 +37,6 @@ TASKS.md
 progress.md
 manual.md
 docs/research/
+
+# PS4Mem.app (scripts/build-app.sh)
+build/

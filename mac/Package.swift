@@ -2,6 +2,7 @@
 // PS4 Mem for macOS: a SwiftUI app that talks to the C# backend (src/PS4Mem.Api) on 127.0.0.1.
 // Build:  swift build          (from this folder; the Command Line Tools are enough)
 // Run:    ../run.sh            (builds the API and the app, runs both, Ctrl+C stops both)
+// App:    ../scripts/build-app.sh   (PS4Mem.app with the self-contained backend inside)
 // Xcode can open this file too, but it isn't needed.
 import PackageDescription
 
