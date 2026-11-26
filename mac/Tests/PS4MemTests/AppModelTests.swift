@@ -166,4 +166,30 @@ final class AppModelTests: XCTestCase {
         await model.refresh()
         XCTAssertTrue(model.processes.processes.isEmpty)
     }
+
+    func testChoosingAProcessLoadsItsSectionsAndDisconnectClearsThem() async {
+        route(["POST /api/connect": .init(status: 200, body: statusJSONConnected),
+               "GET /api/settings": .init(status: 200, body: settingsJSON),
+               "GET /api/processes": .init(status: 200, body: processesJSON),
+               "GET /api/processes/85": .init(status: 200, body: processDetailsJSON()),
+               "GET /api/processes/85/maps": .init(status: 200, body: sectionsJSON()),
+               "POST /api/disconnect": .init(status: 200, body: statusJSONDisconnected)])
+        let model = makeModel()
+        await model.connect()
+        await model.syncSectionsWithChosenProcess()
+        XCTAssertNil(model.sections.pid, "no process chosen, no sections")
+
+        await model.processes.choose(pid: 85)
+        await model.syncSectionsWithChosenProcess()
+        XCTAssertEqual(model.sections.pid, 85)
+        XCTAssertEqual(model.sections.totalCount, 3)
+
+        let calls = StubURLProtocol.requests.count
+        await model.syncSectionsWithChosenProcess()
+        XCTAssertEqual(StubURLProtocol.requests.count, calls, "same process: not loaded again, ticks kept")
+
+        await model.disconnect()
+        XCTAssertNil(model.sections.pid)
+        XCTAssertTrue(model.sections.sections.isEmpty)
+    }
 }

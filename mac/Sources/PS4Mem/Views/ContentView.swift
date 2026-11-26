@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The main window: backend state, connection bar, process picker, and (in later steps) the sections,
-/// scan and cheat panels.
+/// The main window: backend state, connection bar, process picker, sections panel, and (in later steps)
+/// the scan and cheat panels.
 struct ContentView: View {
     let model: AppModel
     @State private var showingInject = false
@@ -13,10 +13,16 @@ struct ContentView: View {
             Divider()
             if model.status.connected {
                 HSplitView {
-                    ProcessPicker(processes: model.processes, onChoose: { _ in })
+                    ProcessPicker(processes: model.processes, onChoose: { _ in
+                        await model.syncSectionsWithChosenProcess()
+                    })
                         .frame(minWidth: 240, idealWidth: 300, maxWidth: 420)
                     sectionsArea
                         .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+                }
+                // A refresh can drop the chosen process (the game was closed): clear or reload the sections.
+                .onChange(of: model.processes.chosen?.pid) {
+                    Task { await model.syncSectionsWithChosenProcess() }
                 }
             } else {
                 placeholder
@@ -28,13 +34,16 @@ struct ContentView: View {
         }
     }
 
-    /// Right of the picker. The sections panel comes in the next step.
+    /// Right of the picker: the chosen process's sections, or a hint to choose one.
+    @ViewBuilder
     private var sectionsArea: some View {
-        Text(model.processes.chosen == nil
-             ? "Choose the game's process on the left."
-             : "Chosen: \(model.processes.chosenText). The sections panel comes next.")
-            .foregroundStyle(.secondary)
-            .padding()
+        if model.processes.chosen == nil {
+            Text("Choose the game's process on the left.")
+                .foregroundStyle(.secondary)
+                .padding()
+        } else {
+            SectionsPanel(sections: model.sections, processText: model.processes.chosenText)
+        }
     }
 
     /// While not connected: a hint about what to do first.

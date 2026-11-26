@@ -19,6 +19,8 @@ final class AppModel {
     let inject: InjectModel
     /// The process picker. Loaded when a connection starts, cleared when it ends.
     let processes: ProcessModel
+    /// The sections panel for the chosen process.
+    let sections: SectionsModel
 
     // MARK: Connection state
 
@@ -45,6 +47,7 @@ final class AppModel {
         }
         self.inject = InjectModel(client: client)
         self.processes = ProcessModel(client: client)
+        self.sections = SectionsModel(client: client)
         self.statusPollInterval = statusPollInterval
     }
 
@@ -132,7 +135,7 @@ final class AppModel {
     }
 
     /// Takes a new status. On connect the process list loads; on disconnect (or a dropped connection)
-    /// the process picker is cleared, since pids belong to that connection.
+    /// the process picker and sections are cleared, since pids belong to that connection.
     func apply(_ newStatus: ConnectionStatus) async {
         let wasConnected = status.connected
         status = newStatus
@@ -140,7 +143,18 @@ final class AppModel {
             await processes.load()
         } else if !newStatus.connected && wasConnected {
             processes.clear()
+            sections.clear()
         }
+    }
+
+    /// Keeps the sections panel on the chosen process: loads the new one's sections, or clears the
+    /// panel when no process is chosen (e.g. the game was closed and the list refreshed).
+    func syncSectionsWithChosenProcess() async {
+        guard let pid = processes.chosen?.pid else {
+            sections.clear()
+            return
+        }
+        if sections.pid != pid { await sections.load(pid: pid) }
     }
 
     /// Runs a button action: marks busy, clears the old error, shows the new one if it fails.
