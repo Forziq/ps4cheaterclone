@@ -134,4 +134,36 @@ final class AppModelTests: XCTestCase {
         let model = makeModel()
         XCTAssertEqual(model.statusText, "Not connected")
     }
+
+    func testConnectLoadsTheProcessListAndDisconnectClearsIt() async {
+        route(["POST /api/connect": .init(status: 200, body: statusJSONConnected),
+               "GET /api/settings": .init(status: 200, body: settingsJSON),
+               "GET /api/processes": .init(status: 200, body: processesJSON),
+               "GET /api/processes/85": .init(status: 200, body: processDetailsJSON()),
+               "POST /api/disconnect": .init(status: 200, body: statusJSONDisconnected)])
+        let model = makeModel()
+        await model.connect()
+        XCTAssertEqual(model.processes.processes.count, 3)
+        XCTAssertEqual(model.processes.highlightedPid, 85)
+        XCTAssertNil(model.processes.chosen, "connecting never chooses a process")
+
+        await model.processes.choose(pid: 85)
+        await model.disconnect()
+        XCTAssertTrue(model.processes.processes.isEmpty)
+        XCTAssertNil(model.processes.chosen)
+    }
+
+    func testADroppedConnectionClearsThePicker() async {
+        route(["GET /api/status": .init(status: 200, body: statusJSONConnected),
+               "GET /api/settings": .init(status: 200, body: settingsJSON),
+               "GET /api/processes": .init(status: 200, body: processesJSON)])
+        let model = makeModel()
+        await model.refresh()
+        XCTAssertEqual(model.processes.processes.count, 3, "a status that turns connected loads the list")
+
+        route(["GET /api/status": .init(status: 200, body: statusJSONDisconnected),
+               "GET /api/settings": .init(status: 200, body: settingsJSON)])
+        await model.refresh()
+        XCTAssertTrue(model.processes.processes.isEmpty)
+    }
 }

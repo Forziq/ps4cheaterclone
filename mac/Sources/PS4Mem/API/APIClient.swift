@@ -59,12 +59,28 @@ struct APIClient {
         try await send("POST", "/api/inject", body: request, timeout: Self.injectTimeout)
     }
 
+    func processes() async throws -> ProcessList { try await send("GET", "/api/processes") }
+
+    func processDetails(pid: Int) async throws -> ProcessDetails { try await send("GET", "/api/processes/\(pid)") }
+
+    /// The sections of a process. `filter` nil = the backend's default name filter; an empty list = any name.
+    func sections(pid: Int, filter: [String]? = nil, includeReadOnly: Bool = false) async throws -> SectionList {
+        var query: [URLQueryItem] = []
+        if let filter {
+            // The backend splits on commas and drops empty parts, so "," means "no filter (any name)".
+            // An empty value isn't sent, as the backend could read it as "no filter given" (= defaults).
+            query.append(URLQueryItem(name: "filter", value: filter.isEmpty ? "," : filter.joined(separator: ",")))
+        }
+        if includeReadOnly { query.append(URLQueryItem(name: "includeReadOnly", value: "true")) }
+        return try await send("GET", "/api/processes/\(pid)/maps", query: query)
+    }
+
     // MARK: Plumbing
 
     /// A call without a body.
-    func send<Response: Decodable>(_ method: String, _ path: String,
+    func send<Response: Decodable>(_ method: String, _ path: String, query: [URLQueryItem] = [],
                                    timeout: TimeInterval = normalTimeout) async throws -> Response {
-        try await send(method, path, bodyData: nil, timeout: timeout)
+        try await send(method, path, query: query, bodyData: nil, timeout: timeout)
     }
 
     /// A call with a JSON body.
@@ -74,12 +90,17 @@ struct APIClient {
         do { data = try JSONEncoder().encode(body) } catch {
             throw APIError.badResponse("couldn't encode the request: \(error.localizedDescription)")
         }
-        return try await send(method, path, bodyData: data, timeout: timeout)
+        return try await send(method, path, query: [], bodyData: data, timeout: timeout)
     }
 
-    private func send<Response: Decodable>(_ method: String, _ path: String, bodyData: Data?,
-                                           timeout: TimeInterval) async throws -> Response {
-        var request = URLRequest(url: baseURL.appendingPathComponent(path), timeoutInterval: timeout)
+    private func send<Response: Decodable>(_ method: String, _ path: String, query: [URLQueryItem],
+                                           bodyData: Data?, timeout: TimeInterval) async throws -> Response {
+        var url = baseURL.appendingPathComponent(path)
+        if !query.isEmpty, var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            parts.queryItems = query
+            url = parts.url ?? url
+        }
+        var request = URLRequest(url: url, timeoutInterval: timeout)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let bodyData {

@@ -17,6 +17,8 @@ final class AppModel {
     let backend: BackendProcess
     /// The inject sheet's state (payload file, loader port, progress).
     let inject: InjectModel
+    /// The process picker. Loaded when a connection starts, cleared when it ends.
+    let processes: ProcessModel
 
     // MARK: Connection state
 
@@ -42,6 +44,7 @@ final class AppModel {
             try .development(apiURL: client.baseURL)
         }
         self.inject = InjectModel(client: client)
+        self.processes = ProcessModel(client: client)
         self.statusPollInterval = statusPollInterval
     }
 
@@ -85,7 +88,7 @@ final class AppModel {
     func connect() async {
         await run {
             let ip = self.ipText.trimmingCharacters(in: .whitespaces)
-            self.status = try await self.client.connect(ip: ip.isEmpty ? nil : ip)
+            await self.apply(try await self.client.connect(ip: ip.isEmpty ? nil : ip))
             // The backend saves a working IP as the newest recent IP; reload so the menu shows it.
             self.settings = try? await self.client.settings()
             if let ip = self.status.ip { self.ipText = ip }
@@ -93,7 +96,7 @@ final class AppModel {
     }
 
     func disconnect() async {
-        await run { self.status = try await self.client.disconnect() }
+        await run { await self.apply(try await self.client.disconnect()) }
     }
 
     /// Injects the payload (from the inject sheet) to the typed IP, then takes the new status.
@@ -106,10 +109,10 @@ final class AppModel {
 
         let ip = ipText.trimmingCharacters(in: .whitespaces)
         guard let response = await inject.inject(ip: ip.isEmpty ? nil : ip) else {
-            if let status = try? await client.status() { self.status = status }
+            if let status = try? await client.status() { await apply(status) }
             return false
         }
-        status = response.status
+        await apply(response.status)
         if let ip = response.status.ip { ipText = ip }
         // A payload path, loader port and IP that worked are saved by the backend: reload them.
         if let settings = try? await client.settings() { self.settings = settings }
@@ -124,8 +127,20 @@ final class AppModel {
     /// Fetches the status and settings again. Errors here aren't shown as action errors: if the backend
     /// is gone, the status just stays as it was and the next poll tries again.
     func refresh() async {
-        if let status = try? await client.status() { self.status = status }
+        if let status = try? await client.status() { await apply(status) }
         if let settings = try? await client.settings() { self.settings = settings }
+    }
+
+    /// Takes a new status. On connect the process list loads; on disconnect (or a dropped connection)
+    /// the process picker is cleared, since pids belong to that connection.
+    func apply(_ newStatus: ConnectionStatus) async {
+        let wasConnected = status.connected
+        status = newStatus
+        if newStatus.connected && !wasConnected {
+            await processes.load()
+        } else if !newStatus.connected && wasConnected {
+            processes.clear()
+        }
     }
 
     /// Runs a button action: marks busy, clears the old error, shows the new one if it fails.
@@ -139,7 +154,7 @@ final class AppModel {
         } catch {
             actionError = error.localizedDescription
             // A failed connect sets lastError in the backend; pick up the new status too.
-            if let status = try? await client.status() { self.status = status }
+            if let status = try? await client.status() { await apply(status) }
         }
     }
 
@@ -150,7 +165,7 @@ final class AppModel {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
                 guard let self, !Task.isCancelled else { return }
-                if !self.isBusy, let status = try? await self.client.status() { self.status = status }
+                if !self.isBusy, let status = try? await self.client.status() { await self.apply(status) }
             }
         }
     }

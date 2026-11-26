@@ -85,3 +85,70 @@ struct InjectResponse: Codable, Equatable {
 struct ApiErrorBody: Codable, Equatable {
     var error: String
 }
+
+// MARK: Processes and sections
+// Source of truth: src/PS4Mem.Api/ConnectionEndpoints.cs (ProcessDto, ProcessListDto, SectionDto,
+// SectionListDto) and src/PS4Mem.Core/Protocol/Ps4Models.cs (ProcessInfo).
+
+/// One process in `GET /api/processes`. `suggested` marks the likely game; the user still chooses.
+struct ProcessEntry: Codable, Equatable, Identifiable {
+    var pid: Int
+    var name: String
+    var suggested: Bool
+    var suggestionReason: String?
+
+    var id: Int { pid }
+}
+
+/// `GET /api/processes`: every process (by pid), the suggested game's pid and why.
+struct ProcessList: Codable, Equatable {
+    var processes: [ProcessEntry]
+    var suggestedPid: Int?
+    var suggestionReason: String
+}
+
+/// `GET /api/processes/{pid}` (ProcessInfo in the backend): the chosen process's name, path and title ID (e.g. CUSA11711).
+struct ProcessDetails: Codable, Equatable {
+    var pid: Int
+    var name: String
+    var path: String
+    var titleId: String
+    var contentId: String
+}
+
+/// One section (memory map) in `GET /api/processes/{pid}/maps`. Addresses are hex text ("0x...")
+/// because a JSON number can't hold every 64-bit address exactly.
+struct SectionEntry: Codable, Equatable, Identifiable {
+    var name: String
+    /// The name, or "(unnamed)" (the game's heap is usually unnamed).
+    var displayName: String
+    var start: String
+    var end: String
+    var size: UInt64
+    var offset: String
+    var prot: Int
+    /// e.g. "rw-".
+    var protText: String
+    /// Selected by the default rules (or by the filter that was sent).
+    var selected: Bool
+    /// Why it is or isn't selected, e.g. "name contains 'anon'" or "not writable".
+    var reason: String
+
+    /// The start address is unique in a process's list, and scans name sections by it.
+    var id: String { start }
+}
+
+/// `GET /api/processes/{pid}/maps`: the sections list with the backend's selection and counts.
+struct SectionList: Codable, Equatable {
+    var pid: Int
+    /// The name filter used (the defaults when none was sent). Empty = any name.
+    var nameFilter: [String]
+    var includeReadOnly: Bool
+    var sections: [SectionEntry]
+    var selectedCount: Int
+    var totalCount: Int
+    var selectedBytes: UInt64
+    var totalBytes: UInt64
+    /// Maps left out of the list (end <= start, too big, duplicates, unreadable).
+    var skippedMaps: Int
+}

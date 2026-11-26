@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// The main window: backend state, connection bar, and (in later steps) the process, scan and cheat panels.
+/// The main window: backend state, connection bar, process picker, and (in later steps) the sections,
+/// scan and cheat panels.
 struct ContentView: View {
     let model: AppModel
     @State private var showingInject = false
@@ -10,7 +11,16 @@ struct ContentView: View {
             BackendBanner(backend: model.backend)
             ConnectionBar(model: model, onInject: { showingInject = true })
             Divider()
-            placeholder
+            if model.status.connected {
+                HSplitView {
+                    ProcessPicker(processes: model.processes, onChoose: { _ in })
+                        .frame(minWidth: 240, idealWidth: 300, maxWidth: 420)
+                    sectionsArea
+                        .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else {
+                placeholder
+            }
         }
         .task { await model.startUp() }
         .sheet(isPresented: $showingInject) {
@@ -18,15 +28,22 @@ struct ContentView: View {
         }
     }
 
-    /// Until the process picker exists (next task): a hint about what to do first.
+    /// Right of the picker. The sections panel comes in the next step.
+    private var sectionsArea: some View {
+        Text(model.processes.chosen == nil
+             ? "Choose the game's process on the left."
+             : "Chosen: \(model.processes.chosenText). The sections panel comes next.")
+            .foregroundStyle(.secondary)
+            .padding()
+    }
+
+    /// While not connected: a hint about what to do first.
     private var placeholder: some View {
         VStack(spacing: 8) {
-            Image(systemName: model.status.connected ? "checkmark.circle" : "gamecontroller")
+            Image(systemName: "gamecontroller")
                 .font(.system(size: 36))
                 .foregroundStyle(.secondary)
-            Text(model.status.connected
-                 ? "Connected. The process picker comes next."
-                 : "Start a game on the PS4, then Connect (or Inject payload first, once per PS4 session).")
+            Text("Start a game on the PS4, then Connect (or Inject payload first, once per PS4 session).")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
