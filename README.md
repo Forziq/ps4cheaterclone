@@ -50,6 +50,7 @@ The app is in `mac/`. It talks to the local backend, which runs inside the app.
 - Hex input, an Aligned toggle, and Pause game while scanning.
 - First scan, Next scan, Undo and New scan.
 - A progress bar with Cancel. The result count and the time are shown when a scan ends.
+- Local scans read memory over several connections at once. By default they use 3 extra connections, as PS4Cheater does. The main connection stays free for locks and live values. The results are the same as with one connection. See Scan read connections under Defaults.
 
 ### Results
 
@@ -168,7 +169,7 @@ This walks through finding the money in a game.
 1. On the PS4, load GoldHEN, turn on BinLoader, start the game and load your save. Close any other debugger first, because only one can run at a time. Save in the game.
 2. Open PS4 Mem and check the IP address. Click Inject payload…, then Inject. If ps4debug already runs, click Connect instead.
 3. Pick the game process and click Use this process. The default sections are usually right.
-4. Set the type to 4 bytes and the compare to Exact value. Type your money and click First scan. The app uses the `local` method, so the first scan reads every selected byte over the network. On Assassin's Creed III that was about 3.4 GB and took about 14 minutes over Wi-Fi. A wired connection is faster. The progress bar shows how far the scan has got, and Cancel stops it.
+4. Set the type to 4 bytes and the compare to Exact value. Type your money and click First scan. The app uses the `local` method, so the first scan reads every selected byte over the network. On Assassin's Creed III that was about 3.4 GB and took about 14 minutes over Wi-Fi. That time was measured with one connection, before scans used extra connections, and a new time isn't measured yet. A wired connection is faster. The progress bar shows how far the scan has got, and Cancel stops it.
 5. Change the money in the game, type the new amount and click Next scan. Repeat until a few results are left. Next scans only re-read the previous results, so they're quick.
 6. Double-click a result to add it to the cheat list. Type a new value and press Return. Turn on the lock to keep the value there.
 
@@ -285,7 +286,9 @@ Options:
 
 Every scan prints and logs the hit count for each section. Every write is logged with the old and new bytes, with `--debug`.
 
-Speed depends on the method and the network. On Assassin's Creed III, a first scan of about 3.4 GB took about 90 seconds with `console`, because the PS4 does the comparison and only the matches cross the network. The same scan with `local` took about 14 minutes over Wi-Fi, at about 4 MB/s. Both found the same 36 results. A wired connection is faster.
+The CLI scan reads over the extra connections too. It prints `Scans read with N extra connection(s).`
+
+Speed depends on the method and the network. On Assassin's Creed III, a first scan of about 3.4 GB took about 90 seconds with `console`, because the PS4 does the comparison and only the matches cross the network. The same scan with `local` took about 14 minutes over Wi-Fi, at about 4 MB/s. That `local` time was measured with one connection, before scans used extra connections. Both found the same 36 results. A wired connection is faster.
 
 ## Local API
 
@@ -332,6 +335,18 @@ Cheat lists are saved per game, by title ID, in `~/Library/Application Support/P
 - Lock a cheat. Its value is written again about every 200 ms until you unlock it. Disconnecting stops every lock.
 - Import and export a cheat list as JSON.
 
+### Settings
+
+`PUT /api/settings` changes the settings. For example, to read on the main connection only:
+
+```bash
+curl -X PUT http://127.0.0.1:5080/api/settings -H "Content-Type: application/json" -d '{"scanReadConnections": 0}'
+```
+
+`scanReadConnections` sets how many extra connections a local scan reads over. The range is 0 to 6, and the default is 3. At 0, the scan reads on the main connection only. A change applies from the next connect.
+
+ps4debug allows 8 connections in all. Close other tools, such as PS4Cheater or PS4CheaterNeo, while you scan.
+
 ## Logs and data
 
 The debug log is off by default. To turn it on:
@@ -348,11 +363,11 @@ Where the logs go:
 - The CLI and `dotnet run` write to `logs/` in the repo folder. The folder is git-ignored.
 - PS4Mem.app writes to `~/Library/Logs/PS4Mem/`. The debug logs are named `ps4mem-YYYYMMDD-HHMMSS.log`. `backend.log` holds the output of the bundled backend. It's replaced at each launch.
 
-The logs show the commands sent and the replies (in hex), the skipped maps, the result counts for each section, and every write. Attach the log when you report a problem.
+The logs show the commands sent and the replies (in hex), the skipped maps, the result counts for each section, and every write. The debug log also has one line per scan with its read speed, for example `Read X MB in Y s (Z MB/s) with N connection(s)`. Attach the log when you report a problem.
 
 App data is in `~/Library/Application Support/PS4Mem/`:
 
-- `settings.json` holds the console IP, the recent IPs, the ports, the payload path and the debug log setting.
+- `settings.json` holds the console IP, the recent IPs, the ports, the payload path, the scan read connections and the debug log setting.
 - `cheats/` holds the cheat lists, one file per title ID.
 - `scans/` holds temporary scan files. They're deleted on exit.
 
@@ -383,6 +398,7 @@ All defaults are in `src/PS4Mem.Core/PS4MemSettings.cs`. You can override each o
 - Payload path: `payloads/ps4debug-ng_v1.3.4_release_2026-11-05.bin`.
 - Local API address: 127.0.0.1:5080. The API accepts only loopback addresses.
 - Scan method: `local`.
+- Scan read connections: 3 extra, from 0 to 6. Set it with `scanReadConnections`, as shown under Settings in the Local API section.
 - Read chunk size: 32 MB.
 - Section name filter: `anon`, `exe`, `Game`, `dlmalloc` and `SmallBlockAllocator`. Writable unnamed sections are selected too.
 - Connect timeout: 5 seconds. Reads have no timeout, because scans can take minutes.
