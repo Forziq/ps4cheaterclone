@@ -279,7 +279,8 @@ Sizes: `NG/source/proc.c:854-875`. Values are little-endian. PS4CheaterNeo's UI 
 ## 11. Range scans on the console (NG only, need auth §12)
 
 These scan **one address range** on the console, so they fit "per section". Both need auth bit `0x2`.
-Neither has a C# client in `ref/`, so both are **untested**.
+Neither has a C# client in `ref/`, so both are **untested on a console** (PS4 Mem's client is
+tested against a fake server only). Verbatim excerpts for the details below: `console-scan.md` §8.
 
 ### 11.1 Iterative trio
 Source: `NG/include/protocol.h:43-49`, `:286-304`, `:431-435`, `NG/source/proc.c:2137-2484`.
@@ -292,6 +293,19 @@ They compare with `proc_scan_compareValues` (`NG/source/proc.c:1166`), not the b
 3. Read batches until the 8-byte sentinel `0xFFFFFFFFFFFFFFFF`. Each batch is `u64 payloadLen`, then
    records of `u32 offset` (from `address`) + `size` value bytes.
 4. Read a final `CMD_SUCCESS`.
+
+Details (`NG/source/proc.c:2155-2272`):
+- `lenData` is **not** checked against the value size; only a zero value size is rejected
+  (`:2165-2168`). The pattern buffer is `lenData` bytes (`:2180`) and the compare reads `size` bytes,
+  so send `lenData = size` (4 for UInt32). `lenData = 0` is not guarded; never send it.
+- For ExactValue the extra value is NULL (`:2204`); `proc_scan_compareValues` compares all `size`
+  bytes (`:1212-1218`), unlike the legacy compare (§10).
+- No maximum `length` (`:2225`), but the field is u32. The server reads `0x8000`-byte chunks
+  (`:2206-2209`, `:2231`) and tests offsets that are multiples of the step from `address`, so an
+  aligned 4-byte value is never split across its chunks.
+- Batches are flushed at `0xFFE8 - size` bytes (`:2228`): payload at most `0xFFEC`. `payloadLen`
+  doesn't count its own 8 bytes.
+- Every error before streaming is `CMD_DATA_NULL` and the connection closes.
 
 **`CMD_PROC_SCAN_COUNT` `0xBDAACC02`** (next scan): body 18 bytes
 `{u32 pid; u64 base_address; u8 valueType; u8 compareType; u32 lenData}`. Same two acks as START,
@@ -334,12 +348,31 @@ and GET `{u32 start_index; u32 count; u32 flags}` pages through them as
 `{u64 addr; current; previous; [first]}`, `CMD_SUCCESS` (`NG/source/scan_turbo.c:1984-2061`).
 Without resident mode it streams the same batches as the trio's START.
 
+**START with `flags = 0`** (what PS4 Mem sends; `NG/source/scan_turbo.c:1462-1707`): the same wire
+sequence as the trio's START. `CMD_SUCCESS` (`:1489`), receive `lenData` pattern bytes (`:1490`),
+`CMD_SUCCESS` (`:1528`, outside the snapshot branch), batches in the trio's format
+(`:1146-1154`, `:1196-1199`), the sentinel (`:1696-1697`), `CMD_SUCCESS` (`:1705`). Batches flush at
+`0x3FFE8 - size` bytes (`:1110`): payload at most `0x3FFEC`. Errors before streaming are all
+`CMD_DATA_NULL` followed by a close (`:1463`, `:1467`, `:1471`, `:1481`, `:1486`, `:1495`, `:1525`;
+`NG/source/server.c:189-190`).
+
+**Unknown commands.** ps4debug-NG answers `CMD_ERROR` and closes the connection
+(`NG/source/proc.c:2524-2525`). Stock ps4debug closes it **without any status**
+(`ps4debug/debugger/source/proc.c:810-815`, `server.c:296-301`). So CAPS (or AUTH) on a server
+without them ends the connection either way: the client must reconnect before carrying on.
+
 Turbo results are freed per connection when the client disconnects (`NG/source/server.c:24-31`).
 
 ### 11.3 What PS4 Mem does
 - **LocalScan** (`CMD_PROC_READ` + compare on the Mac) is the default and the reference.
 - **ConsoleScan** = Turbo if CAPS answers, otherwise the trio, both after auth.
-  The classic `0xBDAA0009` is not used.
+  The classic `0xBDAA0009` is not used. Sequence: AUTH (flags `0x2`); if that fails, reconnect and
+  use LocalScan (stock ps4debug). Then CAPS; if it fails, reconnect and use the trio. Each section
+  is sent as pieces of at most 1 GB (the length is u32), each extended by `size - 1` bytes so a value
+  on a piece edge is found once. A streaming piece can't be interrupted on this connection
+  (CANCEL needs a second one), so cancel takes effect between pieces.
+- **Next scan** always re-reads the previous hits with `CMD_PROC_READ` on the Mac, for both back
+  ends (nearby hits share one read).
 - G0 compares LocalScan and ConsoleScan counts on the same value. A mismatch means
   ConsoleScan is wrong.
 

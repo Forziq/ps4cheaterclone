@@ -45,7 +45,33 @@ public enum Ps4Command : uint
     ProcMaps = 0xBDAA0004,
     /// <summary>protocol.md §6 (NG/include/protocol.h:32).</summary>
     ProcInfo = 0xBDAA000A,
+    /// <summary>NG only. protocol.md §12 (NG/include/protocol.h:45).</summary>
+    ProcAuth = 0xBDAACCFF,
+    /// <summary>NG only, needs auth. protocol.md §11.1 (NG/include/protocol.h:46).</summary>
+    ProcScanStart = 0xBDAACC01,
+    /// <summary>NG only, no auth. protocol.md §11.2 (raw literal, NG/source/proc.c:2493).</summary>
+    TurboCaps = 0xBDAACC10,
+    /// <summary>NG only, needs auth. protocol.md §11.2 (raw literal, NG/source/proc.c:2494).</summary>
+    TurboStart = 0xBDAACC11,
 }
+
+/// <summary>Scan value types, same on client and server (NG/include/protocol.h:246-276). protocol.md §10.1.</summary>
+public enum Ps4ScanValueType : byte
+{
+    UInt8 = 0, Int8 = 1, UInt16 = 2, Int16 = 3, UInt32 = 4, Int32 = 5,
+    UInt64 = 6, Int64 = 7, Float = 8, Double = 9, ArrBytes = 10, String = 11,
+}
+
+/// <summary>Scan compare types (NG/include/protocol.h:246-276). protocol.md §10.1.</summary>
+public enum Ps4ScanCompareType : byte
+{
+    ExactValue = 0, FuzzyValue = 1, BiggerThan = 2, SmallerThan = 3, ValueBetween = 4,
+    IncreasedValue = 5, IncreasedValueBy = 6, DecreasedValue = 7, DecreasedValueBy = 8,
+    ChangedValue = 9, UnchangedValue = 10, UnknownInitialValue = 11,
+}
+
+/// <summary>Reply of Turbo Scan CAPS (protocol.md §11.2, NG/include/protocol.h:349-354).</summary>
+public sealed record TurboScanCaps(uint Version, uint Engines, uint MaxThreads);
 
 /// <summary>Reply status words (NG/include/protocol.h:87-94, LD/PS4DBG.Enums.cs:5-12). protocol.md §3.</summary>
 public enum Ps4Status : uint

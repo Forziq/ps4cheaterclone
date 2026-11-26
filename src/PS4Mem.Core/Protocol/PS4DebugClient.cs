@@ -208,6 +208,109 @@ public sealed class PS4DebugClient : IProcessMemory, IDisposable
     }, $"pid {pid}");
 
     /// <summary>
+    /// CMD_PROC_AUTH (protocol.md §12, NG only): body {u32 magic; u32 flags}; status; u16 chlen +
+    /// chlen challenge bytes; send the XOR response (<see cref="Ps4Auth"/>); final status. Any
+    /// failure makes the server close the connection. The auth bits are global on the server.
+    /// </summary>
+    public void Authenticate(uint flags = Ps4Auth.ScanBit) => Run(Ps4Command.ProcAuth, () =>
+    {
+        var body = new byte[8];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, Ps4Auth.Magic);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), flags);
+        SendCommand(Ps4Command.ProcAuth, body);
+        ExpectSuccess(Ps4Command.ProcAuth, closesOnError: true);
+
+        Span<byte> lengthBytes = stackalloc byte[2];
+        ReceiveInto(lengthBytes, "auth challenge length");
+        var length = BinaryPrimitives.ReadUInt16LittleEndian(lengthBytes);
+        var challenge = Receive(length, "auth challenge");
+        SendRaw(Ps4Auth.Respond(challenge));
+        ExpectSuccess(Ps4Command.ProcAuth, closesOnError: true);
+        return (true, $"flags 0x{flags:X} granted ({length}-byte challenge)");
+    }, $"flags 0x{flags:X}");
+
+    /// <summary>
+    /// Turbo Scan CAPS 0xBDAACC10 (protocol.md §11.2): header only; reply status + 16 bytes
+    /// {u32 version; u32 engines; u32 max_threads; u32 reserved}. No auth needed.
+    /// A server without Turbo Scan closes the connection (NG: CMD_ERROR first; stock ps4debug: no
+    /// status at all), so after a failure the caller must reconnect.
+    /// </summary>
+    public TurboScanCaps GetTurboCaps() => Run(Ps4Command.TurboCaps, () =>
+    {
+        SendCommand(Ps4Command.TurboCaps, ReadOnlySpan<byte>.Empty);
+        ExpectSuccess(Ps4Command.TurboCaps, closesOnError: true);
+        var d = Receive(16, "turbo caps").AsSpan();
+        var caps = new TurboScanCaps(
+            BinaryPrimitives.ReadUInt32LittleEndian(d),
+            BinaryPrimitives.ReadUInt32LittleEndian(d[4..]),
+            BinaryPrimitives.ReadUInt32LittleEndian(d[8..]));
+        return (caps, $"version {caps.Version}, engines 0x{caps.Engines:X}, {caps.MaxThreads} threads");
+    });
+
+    /// <summary>
+    /// One range scan on the console (protocol.md §11): CMD_PROC_SCAN_START 0xBDAACC01 (23-byte body)
+    /// or Turbo START 0xBDAACC11 (27-byte body, the same plus u32 flags; flags 0 streams like the trio).
+    /// Both need auth (<see cref="Authenticate"/>).
+    /// <para>Body {u32 pid; u64 address; u32 length; u8 valueType; u8 compareType; u8 alignment;
+    /// u32 lenData [; u32 flags]}; status; send lenData value bytes; status; then batches of
+    /// u64 payloadLen + records {u32 offset from address; value bytes} until the u64 sentinel
+    /// 0xFFFFFFFFFFFFFFFF; then a final status. Any error status closes the connection.</para>
+    /// <paramref name="onRecord"/> gets each record's offset and value bytes.
+    /// </summary>
+    public void ScanRange(Ps4Command command, int pid, ulong address, uint length,
+        Ps4ScanValueType valueType, Ps4ScanCompareType compareType, byte alignment,
+        ReadOnlySpan<byte> value, Action<uint, ReadOnlySpan<byte>> onRecord)
+    {
+        if (command is not (Ps4Command.ProcScanStart or Ps4Command.TurboStart))
+            throw new ArgumentException($"{command} isn't a range scan command.", nameof(command));
+        var valueBytes = value.ToArray(); // the lambda can't capture a span
+        var turbo = command == Ps4Command.TurboStart;
+
+        Run(command, () =>
+        {
+            var body = new byte[turbo ? 27 : 23];
+            BinaryPrimitives.WriteInt32LittleEndian(body, pid);
+            BinaryPrimitives.WriteUInt64LittleEndian(body.AsSpan(4), address);
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(12), length);
+            body[16] = (byte)valueType;
+            body[17] = (byte)compareType;
+            body[18] = alignment;
+            BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(19), valueBytes.Length);
+            // turbo: body[23..27] = flags 0 (no TS_SERVER_RESIDENT, no snapshot)
+
+            SendCommand(command, body);
+            ExpectSuccess(command, closesOnError: true);
+            SendRaw(valueBytes);
+            ExpectSuccess(command, closesOnError: true);
+
+            var recordSize = 4 + valueBytes.Length;
+            long records = 0, batches = 0;
+            Span<byte> lengthBytes = stackalloc byte[8];
+            while (true)
+            {
+                ReceiveInto(lengthBytes, $"{command} batch length");
+                var payload = BinaryPrimitives.ReadUInt64LittleEndian(lengthBytes);
+                if (payload == ulong.MaxValue) break; // sentinel
+                // Batches are at most 0xFFEC (trio) or 0x3FFEC (turbo) bytes (docs/research §8).
+                if (payload > MaxScanBatchBytes || payload % (ulong)recordSize != 0)
+                    throw new Ps4ProtocolException($"Unexpected {command} batch length {payload}; the reply is out of sync.");
+
+                var batch = Receive((int)payload, $"{command} results");
+                for (var o = 0; o < batch.Length; o += recordSize)
+                    onRecord(BinaryPrimitives.ReadUInt32LittleEndian(batch.AsSpan(o)), batch.AsSpan(o + 4, valueBytes.Length));
+                records += batch.Length / recordSize;
+                batches++;
+            }
+            ExpectSuccess(command, closesOnError: true);
+            return (true, $"{records} results in {batches} batches");
+        }, $"pid {pid}, 0x{address:X} +0x{length:X}, {valueType} {compareType}, alignment {alignment}, " +
+           $"value {Convert.ToHexString(valueBytes)}");
+    }
+
+    /// <summary>Largest believable range-scan batch; real ones are at most 0x3FFEC bytes.</summary>
+    private const ulong MaxScanBatchBytes = 0x10_0000;
+
+    /// <summary>
     /// Reads process memory. Requests larger than <see cref="PS4MemSettings.ReadChunkBytes"/> are
     /// split into several CMD_PROC_READ calls; the lock is released between chunks so other
     /// commands (lock re-writes) can run during a long scan. Unreadable memory comes back as

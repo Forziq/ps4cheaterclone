@@ -7,9 +7,9 @@ using PS4Mem.Core.Protocol;
 namespace PS4Mem.Core.Tests.Fakes;
 
 /// <summary>
-/// A fake ps4debug server on 127.0.0.1. It accepts one client and runs a script that reads
-/// requests and replays the byte layouts from docs/protocol.md. Await <see cref="Completion"/>
-/// to surface the script's assertion failures.
+/// A fake ps4debug server on 127.0.0.1. It accepts one client per script, in order, and runs each
+/// script on its connection: scripts read requests and replay the byte layouts from
+/// docs/protocol.md. Await <see cref="Completion"/> to surface the scripts' assertion failures.
 /// </summary>
 public sealed class FakePs4Server : IDisposable
 {
@@ -18,17 +18,20 @@ public sealed class FakePs4Server : IDisposable
     public int Port { get; }
     public Task Completion { get; }
 
-    public FakePs4Server(Action<FakeConsole> script)
+    public FakePs4Server(params Action<FakeConsole>[] scripts)
     {
         _listener = new TcpListener(IPAddress.Loopback, 0);
         _listener.Start();
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
         Completion = Task.Run(() =>
         {
-            using var client = _listener.AcceptTcpClient();
-            client.NoDelay = true;
-            using var stream = client.GetStream();
-            script(new FakeConsole(client, stream));
+            foreach (var script in scripts)
+            {
+                using var client = _listener.AcceptTcpClient();
+                client.NoDelay = true;
+                using var stream = client.GetStream();
+                script(new FakeConsole(client, stream));
+            }
         });
     }
 

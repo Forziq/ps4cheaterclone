@@ -73,6 +73,17 @@ public sealed class ScanHitBuffer
 
     public ulong AddressAt(int index) => _addresses[index];
 
+    /// <summary>Sorts hits <c>[start, Count)</c> by address (for back ends that may not report in order).</summary>
+    public void SortFrom(int start)
+    {
+        for (var i = start + 1; i < Count; i++)
+            if (_addresses[i] < _addresses[i - 1])
+            {
+                Array.Sort(_addresses, _values, start, Count - start);
+                return;
+            }
+    }
+
     public (ulong[] Addresses, uint[] Values) ToArrays() => (_addresses[..Count], _values[..Count]);
 }
 
