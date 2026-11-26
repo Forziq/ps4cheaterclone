@@ -23,6 +23,8 @@ final class AppModel {
     let sections: SectionsModel
     /// The scanner (and, through it, the results). The backend keeps one set of results per connection.
     let scan: ScanModel
+    /// The results table (the first 5,000 results, current values of the rows on screen).
+    let results: ResultsModel
 
     // MARK: Connection state
 
@@ -51,6 +53,10 @@ final class AppModel {
         self.processes = ProcessModel(client: client)
         self.sections = SectionsModel(client: client)
         self.scan = ScanModel(client: client)
+        let results = ResultsModel(client: client)
+        self.results = results
+        // After a scan, undo or new scan, the table loads the new results' first page.
+        scan.onResultsChanged = { status in await results.reload(status: status) }
         self.statusPollInterval = statusPollInterval
     }
 
@@ -61,12 +67,18 @@ final class AppModel {
         await refresh()
         if ipText.isEmpty { ipText = suggestedIp }
         startPolling()
+        // Current values of the rows on screen, every second, while connected and no scan runs.
+        results.startRefreshing { [weak self] in
+            guard let self else { return false }
+            return self.status.connected && !self.scan.isRunning && !self.scan.isBusy
+        }
     }
 
     /// Called when the app quits (also on Ctrl+C in the terminal).
     func shutDown() {
         pollTask?.cancel()
         pollTask = nil
+        results.stopRefreshing()
         backend.stop()
     }
 
@@ -153,6 +165,7 @@ final class AppModel {
             sections.clear()
             // The backend drops the results and cancels a scan on disconnect.
             scan.clear()
+            results.clear()
         }
     }
 
@@ -164,6 +177,13 @@ final class AppModel {
             return
         }
         if sections.pid != pid { await sections.load(pid: pid) }
+    }
+
+    /// The chosen game's title ID, when the results belong to the chosen process (cheats from the
+    /// results go in that game's list). Nil otherwise.
+    var cheatTitleId: String? {
+        guard let chosen = processes.chosen, scan.status.pid == chosen.pid, !chosen.titleId.isEmpty else { return nil }
+        return chosen.titleId
     }
 
     /// Runs a button action: marks busy, clears the old error, shows the new one if it fails.

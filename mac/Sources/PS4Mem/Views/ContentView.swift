@@ -45,9 +45,16 @@ struct ContentView: View {
             VSplitView {
                 SectionsPanel(sections: model.sections, processText: model.processes.chosenText)
                     .frame(minHeight: 180, idealHeight: 260)
-                ScannerPanel(scan: model.scan, pid: model.processes.chosen?.pid,
-                             sections: model.sections.selectedStarts)
-                    .frame(minHeight: 200, maxHeight: .infinity, alignment: .top)
+                VStack(alignment: .leading, spacing: 0) {
+                    ScannerPanel(scan: model.scan, pid: model.processes.chosen?.pid,
+                                 sections: model.sections.selectedStarts)
+                    ResultsTable(results: model.results, titleId: model.cheatTitleId,
+                                 game: model.processes.chosen?.name)
+                        .padding([.horizontal, .bottom], 12)
+                }
+                .frame(minHeight: 300, maxHeight: .infinity, alignment: .top)
+                // The hex box also switches the results to hex (the backend formats the values).
+                .onChange(of: model.scan.hex) { Task { await model.results.setHex(model.scan.hex) } }
             }
         }
     }
