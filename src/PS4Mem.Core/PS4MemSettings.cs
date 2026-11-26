@@ -22,6 +22,18 @@ public sealed record PS4MemSettings
     public string PayloadPath { get; init; } = "payloads/ps4debug-ng_v1.3.4_release_2026-11-05.bin";
 
     /// <summary>
+    /// How long to wait for the TCP connect. This is the only timeout: reads have none,
+    /// because scans can run for minutes (PROMPT §3.5, protocol.md §2).
+    /// </summary>
+    public TimeSpan ConnectTimeout { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Largest single CMD_PROC_READ request. Bigger reads are split into chunks of this size.
+    /// 32 MB is PS4Cheater's PEEK_BUFFER_LENGTH (protocol.md §8).
+    /// </summary>
+    public int ReadChunkBytes { get; init; } = 32 * 1024 * 1024;
+
+    /// <summary>
     /// Sections whose name contains any of these are selected by default
     /// (PS4Cheater's approach; see PROMPT.md §3.3).
     /// </summary>

@@ -1,13 +1,14 @@
 # Progress
 <!-- Only the progress-writer subagent edits this file. Keep it under 60 lines. -->
-Now: T0.1 Protocol research and scaffold (not started)
-Next: T0.2 Protocol client (libdebug port)
-Waiting on Egor: M0 copy claude-setup/ into .claude/, M1 git/gh check (.NET 10.0.404 and Node done), M2 Claude Code workflow (manual.md). M3 GitHub remote after T0.1.
+Now: T0.2 Protocol client (libdebug port) (in progress, m1 done, next m2)
+Next: T0.2b Public repo prep (licence and README)
+Waiting on Egor: M0b updated agents (after T0.2 finishes), M3 make the repo public (after T0.2b). Optional: M2b git email.
 Blocked: none
 
 ## Tasks  ([ ] todo · [~] in progress · [x] done · [T] waiting for Egor's test)
-[ ] T0.1 Protocol research and scaffold
-[ ] T0.2 Protocol client (libdebug port)
+[x] T0.1 Protocol research and scaffold
+[~] T0.2 Protocol client (libdebug port)
+[ ] T0.2b Public repo prep (licence and README)
 [ ] T0.3 Process picker and section selection
 [ ] T0.4 First/next scan and write (4-byte)
 [ ] T0.5 USER TEST G0: Phase 0 on console
@@ -30,8 +31,15 @@ Blocked: none
 [ ] T3.4 Pointer scanner
 
 ## Log (newest first, max 12 lines)
+- 2026-11-26 T0.2 m1: PS4DebugClient connects, gets version and process list, disconnects cleanly; 20 tests pass (10 new, fake TCP server).
+- 2026-11-26 M3 done (GitHub remote). T0.2 started.
+- 2026-11-26 T0.1 done: refs cloned, protocol.md written from source, scaffold + enableable debug log (--debug / PS4MEM_DEBUG, logs/), first commit.
 - 2026-11-26 Project plan set up (CLAUDE.md, TASKS.md, agents, /progress, /next, manual.md).
 
 ## Decisions and gotchas (max 15 lines)
+- Repo is PUBLIC. README by readme-writer, commit messages by git-committer (both Haiku, uk-writing). Claude's Co-Authored-By trailer is fine.
 - Target .NET 10 LTS rather than 8 (.NET 8 support ended 10 Nov 2026).
 - Payload .bin is git-ignored (third-party binary). ref/ (cloned reference repos) is git-ignored.
+- Classic CMD_PROC_SCAN 0xBDAA0009 is broken in ps4debug-NG (re-reads each section's first page, compares N-1 bytes; protocol.md §10). PS4Cheater never used it: LocalScan over CMD_PROC_READ is the reference; ConsoleScan = Turbo/trio after auth.
+- PS4Cheater has no default section-name list; the anon/exe/Game/dlmalloc/SmallBlockAllocator list comes from PROMPT §3.3 (Egor).
+- Debug log (Core/Logging/DebugLog) is required in every new component; G0 needs logs attached (manual M7).
