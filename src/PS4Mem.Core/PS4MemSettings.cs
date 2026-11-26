@@ -37,6 +37,21 @@ public sealed record PS4MemSettings
     public int ReadChunkBytes { get; init; } = 32 * 1024 * 1024;
 
     /// <summary>
+    /// LocalScan reads each section in pieces of this size and compares them on the Mac.
+    /// Small enough to show progress and cancel quickly, big enough that round trips don't dominate.
+    /// </summary>
+    public int ScanChunkBytes { get; init; } = 4 * 1024 * 1024;
+
+    /// <summary>Scan step in bytes: 4 = 4-byte alignment (the default, like PS4Cheater), 1 = every byte.</summary>
+    public int ScanAlignment { get; init; } = 4;
+
+    /// <summary>
+    /// Next scan: previous hits closer than this are read together in one CMD_PROC_READ
+    /// (reading a gap is cheaper than another round trip). Batches never exceed <see cref="ScanChunkBytes"/>.
+    /// </summary>
+    public int NextScanMaxGapBytes { get; init; } = 64 * 1024;
+
+    /// <summary>
     /// Sections whose name contains any of these are selected by default
     /// (PS4Cheater's approach; see PROMPT.md §3.3).
     /// </summary>

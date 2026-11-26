@@ -14,7 +14,7 @@ namespace PS4Mem.Core.Protocol;
 /// One lock guards the socket, so each command's request and reply never interleave with
 /// another thread's. There is a connect timeout and no read timeout (scans take minutes).
 /// </summary>
-public sealed class PS4DebugClient : IDisposable
+public sealed class PS4DebugClient : IProcessMemory, IDisposable
 {
     private const string Cat = "proto";
 
