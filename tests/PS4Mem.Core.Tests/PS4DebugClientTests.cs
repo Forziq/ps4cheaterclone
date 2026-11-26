@@ -170,6 +170,224 @@ public class PS4DebugClientTests
         Assert.Throws<InvalidOperationException>(() => client.GetVersion());
     }
 
+    // ---- m2: process info, maps, read, write ----
+
+    [Fact]
+    public void Process_info_parses_title_id_and_fixed_width_fields()
+    {
+        FakeRequest? req = null;
+        using var server = new FakePs4Server(c =>
+        {
+            req = c.Expect(Ps4Command.ProcInfo, 4);
+            c.SendStatus(Ps4Status.Success);
+            c.Send(ProcInfo(101, "ac3_engine_orbis_fn.elf", "/app0/ac3_engine_orbis_fn.elf",
+                "CUSA11711", "EP0001-CUSA11711_00-AC3REMASTERED000"));
+        });
+        using var client = ConnectTo(server);
+
+        var info = client.GetProcessInfo(101);
+        server.WaitForScript();
+        Assert.Equal(101, req!.I32(0));
+        Assert.Equal(new ProcessInfo(101, "ac3_engine_orbis_fn.elf", "/app0/ac3_engine_orbis_fn.elf",
+            "CUSA11711", "EP0001-CUSA11711_00-AC3REMASTERED000"), info);
+    }
+
+    [Fact]
+    public void Process_info_error_keeps_the_connection_open()
+    {
+        using var server = new FakePs4Server(c =>
+        {
+            c.Expect(Ps4Command.ProcInfo, 4);
+            c.SendStatus(Ps4Status.DataNull);
+            c.Expect(Ps4Command.Version, 0);
+            c.Send(U32(3), "1.3"u8.ToArray());
+        });
+        using var client = ConnectTo(server);
+
+        var ex = Assert.Throws<Ps4StatusException>(() => client.GetProcessInfo(5));
+        Assert.False(ex.ConnectionClosed);
+        Assert.True(client.IsConnected);
+        Assert.Equal("1.3", client.GetVersion());
+        server.WaitForScript();
+    }
+
+    [Fact]
+    public void Maps_are_parsed_and_broken_ones_skipped()
+    {
+        FakeRequest? req = null;
+        using var server = new FakePs4Server(c =>
+        {
+            req = c.Expect(Ps4Command.ProcMaps, 4);
+            c.SendStatus(Ps4Status.Success);
+            c.Send(U32(4),
+                MapEntry("executable", 0x400000, 0x1400000, 0, 0x5),
+                MapEntry("anon:000a1b2c", 0x2000000000, 0x2010000000, 0x10, 0x3),
+                MapEntry("broken_end_zero", 0x3000000000, 0, 0, 0x3),
+                MapEntry("broken_equal", 0x4000, 0x4000, 0, 0x1));
+        });
+        var sw = new StringWriter();
+        using var client = ConnectTo(server, new DebugLog(sw));
+
+        var maps = client.GetProcessMaps(101);
+        server.WaitForScript();
+        Assert.Equal(101, req!.I32(0));
+        Assert.Equal(
+            [new("executable", 0x400000, 0x1400000, 0, 0x5),
+             new("anon:000a1b2c", 0x2000000000, 0x2010000000, 0x10, 0x3)],
+            maps);
+        Assert.Equal("r-x", maps[0].ProtText);
+        Assert.True(maps[1].IsWritable);
+        Assert.Equal(0x10000000UL, maps[1].Size);
+        Assert.Contains("Skipping map 'broken_end_zero'", sw.ToString());
+        Assert.Contains("4 maps received, 2 kept, 2 skipped", sw.ToString());
+    }
+
+    [Fact]
+    public void Read_sends_pid_address_length_and_returns_raw_bytes()
+    {
+        FakeRequest? req = null;
+        using var server = new FakePs4Server(c =>
+        {
+            req = c.Expect(Ps4Command.ProcRead, 16);
+            c.SendStatus(Ps4Status.Success);
+            c.Send([0xE8, 0x03, 0x00, 0x00, 0xAA]); // no length prefix (protocol.md §8)
+        });
+        using var client = ConnectTo(server);
+
+        var data = client.ReadMemory(101, 0x2000001234, 5);
+        server.WaitForScript();
+        Assert.Equal(101, req!.I32(0));
+        Assert.Equal(0x2000001234UL, req.U64(4));
+        Assert.Equal(5U, req.U32(12));
+        Assert.Equal(new byte[] { 0xE8, 0x03, 0x00, 0x00, 0xAA }, data);
+    }
+
+    [Fact]
+    public void Large_reads_are_split_into_chunks()
+    {
+        var requests = new List<FakeRequest>();
+        using var server = new FakePs4Server(c =>
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                var r = c.Expect(Ps4Command.ProcRead, 16);
+                requests.Add(r);
+                c.SendStatus(Ps4Status.Success);
+                c.Send(Enumerable.Range(0, (int)r.U32(12)).Select(b => (byte)(i + 1)).ToArray());
+            }
+        });
+        using var client = ConnectTo(server, settings: PS4MemSettings.Default with { ReadChunkBytes = 4 });
+
+        var data = client.ReadMemory(7, 0x1000, 10);
+        server.WaitForScript();
+        Assert.Equal([0x1000UL, 0x1004UL, 0x1008UL], requests.Select(r => r.U64(4)));
+        Assert.Equal([4U, 4U, 2U], requests.Select(r => r.U32(12)));
+        Assert.Equal(new byte[] { 1, 1, 1, 1, 2, 2, 2, 2, 3, 3 }, data);
+    }
+
+    [Fact]
+    public void Read_can_be_cancelled_between_chunks()
+    {
+        using var server = new FakePs4Server(c => { });
+        using var client = ConnectTo(server, settings: PS4MemSettings.Default with { ReadChunkBytes = 4 });
+
+        Assert.Throws<OperationCanceledException>(
+            () => client.ReadMemory(7, 0x1000, 10, new CancellationToken(canceled: true)));
+        server.WaitForScript();
+    }
+
+    [Fact]
+    public void Write_follows_ack_then_data_then_final_status()
+    {
+        FakeRequest? req = null;
+        byte[]? payload = null;
+        using var server = new FakePs4Server(c =>
+        {
+            req = c.Expect(Ps4Command.ProcWrite, 16);
+            c.SendStatus(Ps4Status.Success); // ack
+            payload = c.ReadBytes((int)req.U32(12));
+            c.SendStatus(Ps4Status.Success); // final
+        });
+        using var client = ConnectTo(server);
+
+        client.WriteMemory(101, 0x2000001234, [0x0F, 0x27, 0x00, 0x00]); // 9999
+        server.WaitForScript();
+        Assert.Equal(101, req!.I32(0));
+        Assert.Equal(0x2000001234UL, req.U64(4));
+        Assert.Equal(4U, req.U32(12));
+        Assert.Equal(new byte[] { 0x0F, 0x27, 0x00, 0x00 }, payload);
+    }
+
+    [Fact]
+    public void Write_final_error_throws_but_keeps_the_connection()
+    {
+        using var server = new FakePs4Server(c =>
+        {
+            var req = c.Expect(Ps4Command.ProcWrite, 16);
+            c.SendStatus(Ps4Status.Success);
+            c.ReadBytes((int)req.U32(12));
+            c.SendStatus(Ps4Status.Error); // write failed or read-back mismatch (protocol.md §9)
+            c.Expect(Ps4Command.Version, 0);
+            c.Send(U32(3), "1.3"u8.ToArray());
+        });
+        using var client = ConnectTo(server);
+
+        var ex = Assert.Throws<Ps4StatusException>(() => client.WriteMemory(1, 0x10, [1, 2]));
+        Assert.Equal(Ps4Status.Error, ex.Status);
+        Assert.False(ex.ConnectionClosed);
+        Assert.Equal("1.3", client.GetVersion());
+        server.WaitForScript();
+    }
+
+    [Fact]
+    public void Write_ack_error_drops_the_connection_without_sending_data()
+    {
+        using var server = new FakePs4Server(c =>
+        {
+            c.Expect(Ps4Command.ProcWrite, 16);
+            c.SendStatus(Ps4Status.DataNull);
+            c.Close();
+        });
+        using var client = ConnectTo(server);
+
+        var ex = Assert.Throws<Ps4StatusException>(() => client.WriteMemory(1, 0x10, [1, 2]));
+        server.WaitForScript();
+        Assert.True(ex.ConnectionClosed);
+        Assert.False(client.IsConnected);
+    }
+
+    [Fact]
+    public async Task Concurrent_commands_do_not_interleave_on_the_socket()
+    {
+        const int perThread = 50;
+        using var server = new FakePs4Server(c =>
+        {
+            for (var i = 0; i < perThread * 2; i++)
+            {
+                var r = c.ReadRequest();
+                if (r.Command == Ps4Command.Version)
+                {
+                    c.Send(U32(3), "1.3"u8.ToArray());
+                }
+                else
+                {
+                    Assert.Equal(Ps4Command.ProcRead, r.Command);
+                    c.SendStatus(Ps4Status.Success);
+                    c.Send(Enumerable.Repeat((byte)0x5A, (int)r.U32(12)).ToArray());
+                }
+            }
+        });
+        using var client = ConnectTo(server);
+
+        var a = Task.Run(() => { for (var i = 0; i < perThread; i++) Assert.Equal("1.3", client.GetVersion()); });
+        var b = Task.Run(() =>
+        {
+            for (var i = 0; i < perThread; i++) Assert.All(client.ReadMemory(1, 0x10, 64), x => Assert.Equal(0x5A, x));
+        });
+        await Task.WhenAll(a, b);
+        server.WaitForScript();
+    }
+
     [Fact]
     public void Debug_log_records_wire_traffic_and_command_results()
     {

@@ -146,6 +146,138 @@ public sealed class PS4DebugClient : IDisposable
         return (list, $"{list.Count} processes: " + string.Join(", ", list.Select(p => $"{p.Name}({p.Pid})")));
     });
 
+    /// <summary>
+    /// CMD_PROC_INFO (protocol.md §6): body u32 pid; reply status + 188-byte struct
+    /// {u32 pid; char[40] name; char[64] path; char[16] titleid; char[64] contentid}.
+    /// An error keeps the connection open. Port of LD/PS4DBG.Proc.cs:458-466.
+    /// </summary>
+    public ProcessInfo GetProcessInfo(int pid) => Run(Ps4Command.ProcInfo, () =>
+    {
+        SendCommand(Ps4Command.ProcInfo, PidBody(pid));
+        ExpectSuccess(Ps4Command.ProcInfo, closesOnError: false);
+        var d = Receive(Ps4Protocol.ProcInfoSize, "process info").AsSpan();
+        var info = new ProcessInfo(
+            Pid: BinaryPrimitives.ReadInt32LittleEndian(d),
+            Name: Ascii(d.Slice(4, 40)),
+            Path: Ascii(d.Slice(44, 64)),
+            TitleId: Ascii(d.Slice(108, 16)),
+            ContentId: Ascii(d.Slice(124, 64)));
+        return (info, $"pid {info.Pid}, name '{info.Name}', title ID '{info.TitleId}', path '{info.Path}'");
+    }, $"pid {pid}");
+
+    /// <summary>
+    /// CMD_PROC_MAPS (protocol.md §7): body u32 pid; reply status, u32 count, count × 58-byte
+    /// entries {char[32] name; u64 start; u64 end; u64 offset; u16 prot}. Maps with
+    /// <c>end &lt;= start</c> are skipped (and logged), not treated as errors.
+    /// On error the server closes the connection. Port of LD/PS4DBG.Proc.cs:98-127.
+    /// </summary>
+    public IReadOnlyList<MemoryMap> GetProcessMaps(int pid) => Run(Ps4Command.ProcMaps, () =>
+    {
+        SendCommand(Ps4Command.ProcMaps, PidBody(pid));
+        ExpectSuccess(Ps4Command.ProcMaps, closesOnError: true);
+        var count = ReceiveCount("map count", max: 1_000_000);
+        var data = Receive(count * Ps4Protocol.ProcMapEntrySize, "process maps");
+
+        var maps = new List<MemoryMap>(count);
+        var skipped = 0;
+        for (var i = 0; i < count; i++)
+        {
+            var e = data.AsSpan(i * Ps4Protocol.ProcMapEntrySize, Ps4Protocol.ProcMapEntrySize);
+            var map = new MemoryMap(
+                Name: Ascii(e[..32]),
+                Start: BinaryPrimitives.ReadUInt64LittleEndian(e[32..]),
+                End: BinaryPrimitives.ReadUInt64LittleEndian(e[40..]),
+                Offset: BinaryPrimitives.ReadUInt64LittleEndian(e[48..]),
+                Prot: BinaryPrimitives.ReadUInt16LittleEndian(e[56..]));
+
+            if (map.End <= map.Start)
+            {
+                skipped++;
+                _log.Warn(Cat, $"Skipping map '{map.Name}' 0x{map.Start:X}-0x{map.End:X} {map.ProtText}: end <= start");
+                continue;
+            }
+            maps.Add(map);
+        }
+        return (maps, $"{count} maps received, {maps.Count} kept, {skipped} skipped (end <= start)");
+    }, $"pid {pid}");
+
+    /// <summary>
+    /// Reads process memory. Requests larger than <see cref="PS4MemSettings.ReadChunkBytes"/> are
+    /// split into several CMD_PROC_READ calls; the lock is released between chunks so other
+    /// commands (lock re-writes) can run during a long scan. Unreadable memory comes back as
+    /// zeros: the server can't report it (protocol.md §8).
+    /// </summary>
+    public byte[] ReadMemory(int pid, ulong address, int length, CancellationToken cancel = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(length);
+        var buffer = new byte[length];
+        ReadMemory(pid, address, buffer, cancel);
+        return buffer;
+    }
+
+    /// <inheritdoc cref="ReadMemory(int, ulong, int, CancellationToken)"/>
+    public void ReadMemory(int pid, ulong address, Memory<byte> destination, CancellationToken cancel = default)
+    {
+        var chunkSize = Math.Max(1, _settings.ReadChunkBytes);
+        for (var done = 0; done < destination.Length; done += chunkSize)
+        {
+            cancel.ThrowIfCancellationRequested();
+            var chunk = destination.Slice(done, Math.Min(chunkSize, destination.Length - done));
+            ReadChunk(pid, address + (ulong)done, chunk);
+        }
+    }
+
+    /// <summary>
+    /// One CMD_PROC_READ (protocol.md §8): body {u32 pid; u64 address; u32 length};
+    /// reply status, then exactly length raw bytes. On error the server closes the connection.
+    /// Port of LD/PS4DBG.Proc.cs:70-76.
+    /// </summary>
+    private void ReadChunk(int pid, ulong address, Memory<byte> chunk) => Run(Ps4Command.ProcRead, () =>
+    {
+        SendCommand(Ps4Command.ProcRead, ReadWriteBody(pid, address, chunk.Length));
+        ExpectSuccess(Ps4Command.ProcRead, closesOnError: true);
+        ReceiveInto(chunk.Span, $"memory at 0x{address:X}");
+        return (true, $"{chunk.Length} bytes");
+    }, $"pid {pid}, 0x{address:X}, {chunk.Length} bytes");
+
+    /// <summary>
+    /// CMD_PROC_WRITE (protocol.md §9): send body {u32 pid; u64 address; u32 length}, read the
+    /// ack status, send the bytes, read the final status. A failed ack closes the connection;
+    /// a failed final status (bad request, write failed, read-back mismatch) keeps it open.
+    /// Only call this when the user asked for a write (CLAUDE.md §7).
+    /// Port of LD/PS4DBG.Proc.cs:84-91.
+    /// </summary>
+    public void WriteMemory(int pid, ulong address, ReadOnlySpan<byte> data)
+    {
+        var bytes = data.ToArray(); // the lambda can't capture a span
+        Run(Ps4Command.ProcWrite, () =>
+        {
+            SendCommand(Ps4Command.ProcWrite, ReadWriteBody(pid, address, bytes.Length));
+            ExpectSuccess(Ps4Command.ProcWrite, closesOnError: true);
+            SendRaw(bytes);
+            ExpectSuccess(Ps4Command.ProcWrite, closesOnError: false);
+            return (true, $"{bytes.Length} bytes written");
+        }, $"pid {pid}, 0x{address:X}, {bytes.Length} bytes: {Convert.ToHexString(bytes.AsSpan(0, Math.Min(bytes.Length, 16)))}" +
+           (bytes.Length > 16 ? "..." : ""));
+    }
+
+    private static byte[] PidBody(int pid)
+    {
+        var body = new byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(body, pid);
+        return body;
+    }
+
+    /// <summary>{u32 pid; u64 address; u32 length}, packed, LE (protocol.md §8).</summary>
+    private static byte[] ReadWriteBody(int pid, ulong address, int length)
+    {
+        var body = new byte[Ps4Protocol.ProcReadWriteBodySize];
+        BinaryPrimitives.WriteInt32LittleEndian(body, pid);
+        BinaryPrimitives.WriteUInt64LittleEndian(body.AsSpan(4), address);
+        BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(12), length);
+        return body;
+    }
+
     // ---- Plumbing --------------------------------------------------------------------------
 
     /// <summary>Runs one command under the socket lock, logging the command and its result or error.</summary>

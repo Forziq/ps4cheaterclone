@@ -1,8 +1,8 @@
 # Progress
 <!-- Only the progress-writer subagent edits this file. Keep it under 60 lines. -->
-Now: T0.2 Protocol client (libdebug port) (in progress, m1 done, next m2)
+Now: T0.2 Protocol client (libdebug port) (in progress, m2 done, next m3 info CLI)
 Next: T0.2b Public repo prep (licence and README)
-Waiting on Egor: M0b updated agents (after T0.2 finishes), M3 make the repo public (after T0.2b). Optional: M2b git email.
+Waiting on Egor: M0c untrack Claude setup files (now), M3 make the repo public (after T0.2b). Optional: M2b git email.
 Blocked: none
 
 ## Tasks  ([ ] todo · [~] in progress · [x] done · [T] waiting for Egor's test)
@@ -31,12 +31,15 @@ Blocked: none
 [ ] T3.4 Pointer scanner
 
 ## Log (newest first, max 12 lines)
+- 2026-11-26 T0.2 m2: process info (title ID), maps (skips end<=start), chunked 32 MB read with cancel, write; 30 tests pass.
 - 2026-11-26 T0.2 m1: PS4DebugClient connects, gets version and process list, disconnects cleanly; 20 tests pass (10 new, fake TCP server).
 - 2026-11-26 M3 done (GitHub remote). T0.2 started.
 - 2026-11-26 T0.1 done: refs cloned, protocol.md written from source, scaffold + enableable debug log (--debug / PS4MEM_DEBUG, logs/), first commit.
 - 2026-11-26 Project plan set up (CLAUDE.md, TASKS.md, agents, /progress, /next, manual.md).
 
 ## Decisions and gotchas (max 15 lines)
+- Claude setup (.claude/, CLAUDE.md, PROMPT.md, TASKS.md, progress.md, manual.md, docs/research/) is git-ignored; GitHub gets project files only.
+- PS4 IP is private: only in git-ignored .env.local (PS4_IP) and app settings; never in tracked files or README. Cleanup of code/tests/README is in T0.2b.
 - Repo is PUBLIC. README by readme-writer, commit messages by git-committer (both Haiku, uk-writing). Claude's Co-Authored-By trailer is fine.
 - Target .NET 10 LTS rather than 8 (.NET 8 support ended 10 Nov 2026).
 - Payload .bin is git-ignored (third-party binary). ref/ (cloned reference repos) is git-ignored.
