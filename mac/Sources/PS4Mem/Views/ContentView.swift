@@ -1,15 +1,34 @@
 import SwiftUI
 
-/// The main window: the backend state for now; the connection bar and the panels follow.
+/// The main window: backend state, connection bar, and (in later steps) the process, scan and cheat panels.
 struct ContentView: View {
     let model: AppModel
+    @State private var showingInject = false
 
     var body: some View {
         VStack(spacing: 0) {
             BackendBanner(backend: model.backend)
-            Spacer()
+            ConnectionBar(model: model, onInject: { showingInject = true })
+            Divider()
+            placeholder
         }
         .task { await model.startUp() }
+    }
+
+    /// Until the process picker exists (next task): a hint about what to do first.
+    private var placeholder: some View {
+        VStack(spacing: 8) {
+            Image(systemName: model.status.connected ? "checkmark.circle" : "gamecontroller")
+                .font(.system(size: 36))
+                .foregroundStyle(.secondary)
+            Text(model.status.connected
+                 ? "Connected. The process picker comes next."
+                 : "Start a game on the PS4, then Connect (or Inject payload first, once per PS4 session).")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
     }
 }
 

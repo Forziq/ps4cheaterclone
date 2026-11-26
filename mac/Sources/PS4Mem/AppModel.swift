@@ -16,20 +16,119 @@ final class AppModel {
     let client: APIClient
     let backend: BackendProcess
 
-    init(client: APIClient = APIClient(baseURL: AppModel.apiURL), backend: BackendProcess? = nil) {
+    // MARK: Connection state
+
+    /// The last status from the backend.
+    private(set) var status: ConnectionStatus = .disconnected
+    /// The saved settings (recent IPs, payload path, loader port). Nil until the backend answers.
+    private(set) var settings: AppSettings?
+    /// What's typed in the IP field. Empty means "let the backend pick" (PS4_IP, ps4ip.local or saved IP).
+    var ipText: String = ""
+    /// True while connect or disconnect is waiting for the backend.
+    private(set) var isBusy = false
+    /// The error from the last button press (connect/disconnect). The backend's text, shown as it is.
+    private(set) var actionError: String?
+
+    /// How often the status is fetched again, so a dropped connection shows up on its own.
+    private let statusPollInterval: TimeInterval
+    private var pollTask: Task<Void, Never>?
+
+    init(client: APIClient = APIClient(baseURL: AppModel.apiURL), backend: BackendProcess? = nil,
+         statusPollInterval: TimeInterval = 3) {
         self.client = client
         self.backend = backend ?? BackendProcess(client: client) {
             try .development(apiURL: client.baseURL)
         }
+        self.statusPollInterval = statusPollInterval
     }
 
-    /// Called once when the window appears.
+    /// Called once when the window appears: start (or find) the backend, then load the status and settings.
     func startUp() async {
         await backend.start()
+        guard backend.isRunning else { return }
+        await refresh()
+        if ipText.isEmpty { ipText = suggestedIp }
+        startPolling()
     }
 
     /// Called when the app quits (also on Ctrl+C in the terminal).
     func shutDown() {
+        pollTask?.cancel()
+        pollTask = nil
         backend.stop()
     }
+
+    /// The IP to pre-fill: the backend's default (PS4_IP, ps4ip.local or saved), else the newest recent IP.
+    var suggestedIp: String {
+        status.defaultIp ?? settings?.consoleIp.nilIfEmpty ?? settings?.recentIps.first ?? ""
+    }
+
+    /// Recent IPs for the menu next to the IP field (newest first).
+    var recentIps: [String] { settings?.recentIps ?? [] }
+
+    /// One line for the status area: connected (IP, port, ps4debug version) or why not.
+    var statusText: String {
+        if status.connected {
+            let place = [status.ip, status.port.map(String.init)].compactMap { $0 }.joined(separator: ":")
+            let version = status.version.map { "ps4debug \($0)" } ?? "ps4debug (version unknown)"
+            return "Connected to \(place) · \(version)"
+        }
+        return "Not connected"
+    }
+
+    // MARK: Actions
+
+    /// Connects to ps4debug on the typed IP (or the backend's default when the field is empty).
+    func connect() async {
+        await run {
+            let ip = self.ipText.trimmingCharacters(in: .whitespaces)
+            self.status = try await self.client.connect(ip: ip.isEmpty ? nil : ip)
+            // The backend saves a working IP as the newest recent IP; reload so the menu shows it.
+            self.settings = try? await self.client.settings()
+            if let ip = self.status.ip { self.ipText = ip }
+        }
+    }
+
+    func disconnect() async {
+        await run { self.status = try await self.client.disconnect() }
+    }
+
+    /// Fetches the status and settings again. Errors here aren't shown as action errors: if the backend
+    /// is gone, the status just stays as it was and the next poll tries again.
+    func refresh() async {
+        if let status = try? await client.status() { self.status = status }
+        if let settings = try? await client.settings() { self.settings = settings }
+    }
+
+    /// Runs a button action: marks busy, clears the old error, shows the new one if it fails.
+    private func run(_ action: @escaping () async throws -> Void) async {
+        guard !isBusy else { return }
+        isBusy = true
+        actionError = nil
+        defer { isBusy = false }
+        do {
+            try await action()
+        } catch {
+            actionError = error.localizedDescription
+            // A failed connect sets lastError in the backend; pick up the new status too.
+            if let status = try? await client.status() { self.status = status }
+        }
+    }
+
+    private func startPolling() {
+        pollTask?.cancel()
+        let interval = statusPollInterval
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                guard let self, !Task.isCancelled else { return }
+                if !self.isBusy, let status = try? await self.client.status() { self.status = status }
+            }
+        }
+    }
+}
+
+extension String {
+    /// nil for an empty string, so `a.nilIfEmpty ?? b` falls through to b.
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
