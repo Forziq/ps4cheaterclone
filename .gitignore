@@ -10,6 +10,11 @@ node_modules/
 out/
 web/.env*
 
+# Swift (mac/)
+mac/.build/
+mac/.swiftpm/
+*.xcodeproj/xcuserdata/
+
 # Project
 ref/
 payloads/*.bin
