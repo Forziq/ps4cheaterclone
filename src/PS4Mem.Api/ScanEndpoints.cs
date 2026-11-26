@@ -196,16 +196,9 @@ public static class ScanEndpoints
         return chosen.DistinctBy(s => (s.Start, s.End)).ToList();
     }
 
-    internal static ulong ParseAddress(string text)
-    {
-        var t = text.Trim();
-        if (t.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) t = t[2..];
-        if (!ulong.TryParse(t, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var address))
-            throw new ArgumentException($"'{text}' isn't a hex address like 0x200000000.");
-        return address;
-    }
+    internal static ulong ParseAddress(string text) => HexAddress.Parse(text);
 
-    internal static string Hex(ulong value) => $"0x{value:X}";
+    internal static string Hex(ulong value) => HexAddress.Format(value);
 
     internal static ScanStatusDto ToDto(ScanStatus s) => new(
         s.State.ToString().ToLowerInvariant(), s.Kind, s.Query, s.Method,

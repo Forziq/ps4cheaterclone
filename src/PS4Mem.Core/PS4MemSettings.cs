@@ -133,6 +133,15 @@ public sealed record PS4MemSettings
     public IReadOnlyList<string> SystemProcessPrefixes { get; init; } =
         ["Sce", "sys", "mini-syscore", "orbis_", "GnmCompositor", "fs_cleaner"];
 
+    /// <summary>
+    /// Folder for the cheat tables, one <c>&lt;TITLEID&gt;.json</c> per game. Empty means
+    /// <c>~/Library/Application Support/PS4Mem/cheats</c> (<see cref="Cheats.CheatStore.DefaultRoot"/>).
+    /// </summary>
+    public string CheatDirectory { get; init; } = "";
+
+    /// <summary>How often a locked cheat is written again (PROMPT §5: about every 200 ms).</summary>
+    public TimeSpan CheatLockInterval { get; init; } = TimeSpan.FromMilliseconds(200);
+
     /// <summary>The usual game process name (checked first by the process picker).</summary>
     public string GameProcessName { get; init; } = "eboot.bin";
 

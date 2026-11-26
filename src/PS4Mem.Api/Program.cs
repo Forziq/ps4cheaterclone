@@ -1,12 +1,13 @@
 using PS4Mem.Api;
 using PS4Mem.Core;
+using PS4Mem.Core.Cheats;
 using PS4Mem.Core.Connection;
 using PS4Mem.Core.Logging;
 using PS4Mem.Core.Scanning;
 using PS4Mem.Core.Settings;
 
 // PS4 Mem backend: a minimal API on 127.0.0.1 that the macOS app talks to.
-// It holds the ps4debug connection and the scan session (and later cheat tables).
+// It holds the ps4debug connection, the scan session and the cheat lists.
 // Run:  dotnet run --project src/PS4Mem.Api       (sample calls: src/PS4Mem.Api/api.http)
 // Options (command line or environment):
 //   --urls http://127.0.0.1:<port>      listen address; loopback only (default PS4MemSettings.ApiUrl)
@@ -36,6 +37,10 @@ builder.Services.AddSingleton(_ => IpSources.FromEnvironment());
 builder.Services.AddSingleton<ConnectionManager>();
 // First/next scans, results and undo. Disconnect (or a lost connection) cancels the scan and drops its results.
 builder.Services.AddSingleton(sp => new ScanSession(sp.GetRequiredService<PS4MemSettings>()));
+// Cheat lists per title ID in ~/Library/Application Support/PS4Mem/cheats (or CheatDirectory).
+builder.Services.AddSingleton(sp => new CheatStore(
+    sp.GetRequiredService<PS4MemSettings>().CheatDirectory, sp.GetRequiredService<DebugLogSwitch>()));
+builder.Services.AddSingleton(sp => new CheatList(sp.GetRequiredService<CheatStore>(), sp.GetRequiredService<DebugLogSwitch>()));
 
 var app = builder.Build();
 
@@ -54,6 +59,7 @@ app.UseMiddleware<ApiErrors>();
 app.MapSettingsEndpoints();
 app.MapConnectionEndpoints();
 app.MapScanEndpoints();
+app.MapCheatEndpoints();
 
 app.Run();
 

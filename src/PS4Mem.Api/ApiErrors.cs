@@ -1,4 +1,5 @@
 using System.Text.Json;
+using PS4Mem.Core.Cheats;
 using PS4Mem.Core.Connection;
 using PS4Mem.Core.Logging;
 using PS4Mem.Core.Payload;
@@ -16,6 +17,8 @@ namespace PS4Mem.Api;
 /// payload already runs (<see cref="PayloadErrorKind.AlreadyRunning"/>), or a scan is running or
 /// there are no results (<see cref="ScanStateException"/>);</item>
 /// <item>400 also for a payload file that is missing or empty (<see cref="PayloadErrorKind.FileProblem"/>);</item>
+/// <item>404: a cheat id that isn't in the list (<see cref="CheatNotFoundException"/>);</item>
+/// <item>409 also for a cheat file on disk that can't be read (<see cref="CheatFileException"/>);</item>
 /// <item>502: the PS4 refused a command or the connection failed (<see cref="Ps4ProtocolException"/>).</item>
 /// </list>
 /// Anything else is a bug: 500, and the full exception goes to the debug log.
@@ -38,6 +41,8 @@ public sealed class ApiErrors(RequestDelegate next, DebugLogSwitch logs, ILogger
                 FormatException f => (400, f.Message),
                 ConnectionStateException c => (409, c.Message),
                 ScanStateException s => (409, s.Message),
+                CheatNotFoundException n => (404, n.Message),
+                CheatFileException f => (409, f.Message),
                 PayloadException { Kind: PayloadErrorKind.AlreadyRunning } p => (409, p.Message),
                 PayloadException { Kind: PayloadErrorKind.FileProblem } p => (400, p.Message),
                 Ps4ProtocolException p => (502, p.Message),

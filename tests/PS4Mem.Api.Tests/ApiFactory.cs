@@ -12,7 +12,8 @@ namespace PS4Mem.Api.Tests;
 /// The real API in memory, with its settings file in a temp folder so tests never touch
 /// ~/Library/Application Support/PS4Mem. The console IP only comes from requests and the
 /// saved settings (never PS4_IP or the repo's ps4ip.local). Spilled scan data goes to the temp
-/// folder too, and scan progress events come every 20 ms.
+/// folder too, and so do the cheat lists. Scan progress events come every 20 ms, and locked
+/// cheats are written every 20 ms.
 /// </summary>
 public class ApiFactory : WebApplicationFactory<Program>
 {
@@ -36,6 +37,8 @@ public class ApiFactory : WebApplicationFactory<Program>
             {
                 ScanDataDirectory = Path.Combine(TempDir, "scans"),
                 ScanProgressInterval = TimeSpan.FromMilliseconds(20),
+                CheatDirectory = Path.Combine(TempDir, "cheats"),
+                CheatLockInterval = TimeSpan.FromMilliseconds(20),
             }));
         });
     }
