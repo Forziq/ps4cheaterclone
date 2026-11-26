@@ -43,6 +43,25 @@ public sealed record PS4MemSettings
     public IReadOnlyList<string> SectionNameFilter { get; init; } =
         ["anon", "exe", "Game", "dlmalloc", "SmallBlockAllocator"];
 
+    /// <summary>Selected-by-default sections must also be writable (PROMPT.md §3.3).</summary>
+    public bool SectionRequireWritable { get; init; } = true;
+
+    /// <summary>
+    /// Maps bigger than this are treated as broken and skipped (64 GB, the same limit as
+    /// PS4CheaterNeo, SectionTool.cs:308; protocol.md §14).
+    /// </summary>
+    public ulong MaxSectionBytes { get; init; } = 0x10_0000_0000UL;
+
+    /// <summary>
+    /// <c>*.elf</c> processes whose name starts with one of these (ignoring case) are system
+    /// processes, never the game. The last four are .elf names seen on a real console.
+    /// </summary>
+    public IReadOnlyList<string> SystemProcessPrefixes { get; init; } =
+        ["Sce", "sys", "mini-syscore", "orbis_", "GnmCompositor", "fs_cleaner"];
+
+    /// <summary>The usual game process name (checked first by the process picker).</summary>
+    public string GameProcessName { get; init; } = "eboot.bin";
+
     /// <summary>
     /// Write a debug log for testing sessions (also on with <c>--debug</c> or <c>PS4MEM_DEBUG=1</c>).
     /// See <see cref="Logging.DebugLog"/>.
