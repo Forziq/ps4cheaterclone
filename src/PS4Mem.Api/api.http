@@ -1,7 +1,15 @@
 # PS4 Mem API sample calls (VS Code REST Client, JetBrains HTTP client or Visual Studio).
 # Start the API first:  dotnet run --project src/PS4Mem.Api
+# Errors come back as {"error": "..."}: 400 bad input, 409 not connected / already connected,
+# 502 the PS4 refused or didn't answer.
+# The tests replay this file top to bottom against a fake console, so keep every call working.
 
 @host = http://127.0.0.1:5080
+# A pid from GET /api/processes (the game you chose).
+@pid = 85
+
+### Connection state, and the IP a connect would use
+GET {{host}}/api/status
 
 ### Saved settings
 GET {{host}}/api/settings
@@ -14,3 +22,31 @@ Content-Type: application/json
   "loaderPort": 9090,
   "debugLogging": false
 }
+
+### Connect. With no ip this uses PS4_IP, then ps4ip.local, then the saved IP.
+# To pick the IP yourself, send {"ip": "<PS4_IP>"} instead.
+POST {{host}}/api/connect
+Content-Type: application/json
+
+{}
+
+### Status again: connected, with the ps4debug version
+GET {{host}}/api/status
+
+### Every process; the likely game has "suggested": true and a reason (you still choose)
+GET {{host}}/api/processes
+
+### Process info: name, path and title ID
+GET {{host}}/api/processes/{{pid}}
+
+### Sections with the default selection and each section's reason
+GET {{host}}/api/processes/{{pid}}/maps
+
+### Your own name filter (empty = any name), and read-only sections too
+GET {{host}}/api/processes/{{pid}}/maps?filter=anon,exe&includeReadOnly=true
+
+### Select every section
+GET {{host}}/api/processes/{{pid}}/maps?all=true
+
+### Disconnect (always 200)
+POST {{host}}/api/disconnect

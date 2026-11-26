@@ -1,5 +1,6 @@
 using PS4Mem.Api;
 using PS4Mem.Core;
+using PS4Mem.Core.Connection;
 using PS4Mem.Core.Logging;
 using PS4Mem.Core.Settings;
 
@@ -28,6 +29,10 @@ builder.Services.AddSingleton<DebugLogSwitch>();
 builder.Services.AddSingleton(sp => new AppSettingsStore(
     sp.GetRequiredService<IConfiguration>()["PS4Mem:SettingsPath"],
     sp.GetRequiredService<DebugLogSwitch>()));
+// The console IP: request, then PS4_IP, then ps4ip.local (from the working folder up), then saved settings.
+builder.Services.AddSingleton(_ => IpSources.FromEnvironment());
+// The one ps4debug connection. Disposed (cleanly disconnected) when the API stops.
+builder.Services.AddSingleton<ConnectionManager>();
 
 var app = builder.Build();
 
@@ -40,6 +45,7 @@ if (store.LoadError is not null)
 
 app.UseMiddleware<ApiErrors>();
 app.MapSettingsEndpoints();
+app.MapConnectionEndpoints();
 
 app.Run();
 
