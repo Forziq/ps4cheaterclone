@@ -102,7 +102,7 @@ struct ScannerPanel: View {
         }
     }
 
-    /// Hex, alignment, pause, and the buttons.
+    /// Hex, alignment, scan method, pause, and the buttons.
     private var optionsRow: some View {
         HStack(spacing: 12) {
             Toggle("Hex", isOn: $scan.hex)
@@ -114,6 +114,13 @@ struct ScannerPanel: View {
                 .toggleStyle(.checkbox)
                 .disabled(scan.typeLocked)
                 .help("Only look at addresses that are a multiple of 4 (less for 1- and 2-byte values). Faster, and finds almost every game value.")
+            Picker("Scan on", selection: $scan.method) {
+                ForEach(ScanMethodKind.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+            .disabled(scan.typeLocked)
+            .help("Where the first scan compares values. Mac: reads memory and compares here (the default). PS4: the console compares and sends only the hits; if it can't, the scan runs on the Mac and says so. Next scans always run on the Mac.")
             Toggle("Pause game while scanning", isOn: $scan.pauseGame)
                 .toggleStyle(.checkbox)
                 .disabled(scan.isRunning)

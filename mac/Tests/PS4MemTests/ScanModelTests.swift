@@ -111,6 +111,7 @@ final class ScanModelTests: XCTestCase {
         XCTAssertNil(sent?["value2"], "exact sends one value")
         XCTAssertEqual(sent?["sections"] as? [String], ["0x8000000000"])
         XCTAssertEqual(sent?["aligned"] as? Bool, true)
+        XCTAssertEqual(sent?["method"] as? String, "local", "scans on the Mac by default")
         XCTAssertEqual(sent?["pauseGame"] as? Bool, false)
         XCTAssertEqual(paths, ["/api/scan/first", "/api/scan/progress"])
 
@@ -122,6 +123,23 @@ final class ScanModelTests: XCTestCase {
         XCTAssertFalse(model.isFollowing)
         XCTAssertEqual(model.statusText, "1,234 results · scan 1 took 3.2 s")
         XCTAssertTrue(model.availableCompares.contains(.increased), "next-scan compares after results")
+    }
+
+    func testFirstScanSendsTheConsoleMethodWhenChosen() async {
+        StubURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/api/scan/first": return .init(status: 202, body: scanStatusJSON(state: "running", percent: 0,
+                                                                                    scanNumber: 0, resultCount: 0, type: nil))
+            case "/api/scan/progress": return .init(status: 200, body: sseEvent("done", scanStatusJSON()))
+            default: return .init(status: 404, body: "{\"error\":\"no\"}")
+            }
+        }
+        let model = ScanModel(client: stubClient(), pollInterval: 0.01)
+        model.value = "100"
+        model.method = .console
+        await model.firstScan(pid: 85, sections: ["0x8000000000"])
+
+        XCTAssertEqual(body(of: "/api/scan/first")?["method"] as? String, "console")
     }
 
     func testFallsBackToStatusChecksWhenTheStreamFails() async {

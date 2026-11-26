@@ -124,3 +124,24 @@ enum CompareKind: String, CaseIterable, Identifiable {
         }
     }
 }
+
+/// Where a first scan compares values. Names match ScanMethod in the C# backend
+/// (src/PS4Mem.Core/Scanning/ScanNames.cs). Next scans always run on the Mac.
+enum ScanMethodKind: String, CaseIterable, Identifiable {
+    /// Reads memory over the network and compares on the Mac (the default, like PS4Cheater).
+    case local
+    /// The PS4 compares and sends back only the hits. Falls back to local when the console can't run it.
+    case console
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .local: return "Mac"
+        case .console: return "PS4"
+        }
+    }
+
+    /// The name sent to the backend.
+    var apiName: String { rawValue }
+}

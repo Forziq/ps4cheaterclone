@@ -26,6 +26,8 @@ final class ScanModel {
     var hex = false
     /// Only look at aligned addresses (4 bytes, less for small types). First scan only.
     var aligned = true
+    /// Where the first scan compares: on the Mac (default) or on the PS4. Next scans always run on the Mac.
+    var method: ScanMethodKind = .local
     /// Stop the game while scanning, so values don't change mid-scan. It is always resumed.
     var pauseGame = false
 
@@ -121,7 +123,8 @@ final class ScanModel {
         let request = FirstScanRequest(
             pid: pid, type: typeName, compare: compare.apiName,
             value: compare.valueCount >= 1 ? value : nil, value2: compare.valueCount >= 2 ? value2 : nil,
-            hex: hexApplies && hex, sections: sections, aligned: aligned, pauseGame: pauseGame)
+            hex: hexApplies && hex, sections: sections, aligned: aligned,
+            method: method.apiName, pauseGame: pauseGame)
         await start { try await self.client.firstScan(request) }
     }
 

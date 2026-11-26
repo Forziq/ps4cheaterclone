@@ -173,6 +173,8 @@ struct FirstScanRequest: Encodable, Equatable {
     var sections: [String]
     /// false scans every byte; true uses the alignment setting (4 bytes, less for small types).
     var aligned: Bool
+    /// "local" compares on the Mac; "console" on the PS4 (the backend falls back to local when it can't).
+    var method: String
     /// Stop the game while scanning (it is always resumed afterwards).
     var pauseGame: Bool
 }

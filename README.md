@@ -47,10 +47,12 @@ The app is in `mac/`. It talks to the local backend, which runs inside the app.
 
 - Value types: 1, 2, 4 and 8 bytes, signed or unsigned, float, double, string and byte arrays. Byte arrays accept `??` as a wildcard.
 - Compares: exact, bigger than, smaller than, between, increased, increased by, decreased, decreased by, changed, unchanged and unknown initial value.
-- Hex input, an Aligned toggle, and Pause game while scanning.
+- Hex input, an Aligned toggle, Pause game while scanning, and a Scan on picker (Mac or PS4) for the first scan.
 - First scan, Next scan, Undo and New scan.
 - A progress bar with Cancel. The result count and the time are shown when a scan ends.
 - Local scans read memory over several connections at once. By default they use 3 extra connections, as PS4Cheater does. The main connection stays free for locks and live values. The results are the same as with one connection. See Scan read connections under Defaults.
+- Scan on: Mac (the default) or PS4. With Mac, the Mac reads the memory and compares it. With PS4, the PS4 does the comparison and sends back only the hits. If the console can't run it, the scan runs on the Mac and the app shows a note saying so.
+- Scan on applies to the first scan only. The picker is greyed out while there are results. Click New scan to unlock it. Next scans always run on the Mac.
 
 ### Results
 
@@ -169,8 +171,8 @@ This walks through finding the money in a game.
 1. On the PS4, load GoldHEN, turn on BinLoader, start the game and load your save. Close any other debugger first, because only one can run at a time. Save in the game.
 2. Open PS4 Mem and check the IP address. Click Inject payload…, then Inject. If ps4debug already runs, click Connect instead.
 3. Pick the game process and click Use this process. The default sections are usually right.
-4. Set the type to 4 bytes and the compare to Exact value. Type your money and click First scan. The app uses the `local` method, so the first scan reads every selected byte over the network. On Assassin's Creed III that was about 3.4 GB and took about 14 minutes over Wi-Fi. That time was measured with one connection, before scans used extra connections, and a new time isn't measured yet. A wired connection is faster. The progress bar shows how far the scan has got, and Cancel stops it.
-5. Change the money in the game, type the new amount and click Next scan. Repeat until a few results are left. Next scans only re-read the previous results, so they're quick.
+4. Set the type to 4 bytes and the compare to Exact value. Type your money. Scan on is set to Mac by default. The Mac reads every selected byte over the network. On Assassin's Creed III that was about 3.4 GB and took about 14 minutes over Wi-Fi with one connection. That time was measured before scans used extra connections, and a new time isn't measured yet. For a much faster first scan, pick PS4. The PS4 does the comparison and sends back only the hits. On Assassin's Creed III it took about 90 seconds, and it found the same 36 results. Then click First scan. A wired connection is faster. The progress bar shows how far the scan has got, and Cancel stops it.
+5. Change the money in the game, type the new amount and click Next scan. Repeat until a few results are left. Next scans only re-read the previous results, so they're quick. They always run on the Mac, whichever option you picked for the first scan.
 6. Double-click a result to add it to the cheat list. Type a new value and press Return. Turn on the lock to keep the value there.
 
 ## Command line
