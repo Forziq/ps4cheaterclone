@@ -13,6 +13,9 @@ struct ContentView: View {
             placeholder
         }
         .task { await model.startUp() }
+        .sheet(isPresented: $showingInject) {
+            InjectSheet(model: model, inject: model.inject)
+        }
     }
 
     /// Until the process picker exists (next task): a hint about what to do first.

@@ -15,6 +15,8 @@ final class AppModel {
 
     let client: APIClient
     let backend: BackendProcess
+    /// The inject sheet's state (payload file, loader port, progress).
+    let inject: InjectModel
 
     // MARK: Connection state
 
@@ -39,6 +41,7 @@ final class AppModel {
         self.backend = backend ?? BackendProcess(client: client) {
             try .development(apiURL: client.baseURL)
         }
+        self.inject = InjectModel(client: client)
         self.statusPollInterval = statusPollInterval
     }
 
@@ -91,6 +94,31 @@ final class AppModel {
 
     func disconnect() async {
         await run { self.status = try await self.client.disconnect() }
+    }
+
+    /// Injects the payload (from the inject sheet) to the typed IP, then takes the new status.
+    /// Returns true when it worked and the app is connected (the sheet then closes).
+    func injectPayload() async -> Bool {
+        guard !isBusy else { return false }
+        isBusy = true
+        actionError = nil
+        defer { isBusy = false }
+
+        let ip = ipText.trimmingCharacters(in: .whitespaces)
+        guard let response = await inject.inject(ip: ip.isEmpty ? nil : ip) else {
+            if let status = try? await client.status() { self.status = status }
+            return false
+        }
+        status = response.status
+        if let ip = response.status.ip { ipText = ip }
+        // A payload path, loader port and IP that worked are saved by the backend: reload them.
+        if let settings = try? await client.settings() { self.settings = settings }
+        return response.status.connected
+    }
+
+    /// The inject sheet saved a setting (payload path or loader port).
+    func settingsChanged(_ settings: AppSettings) {
+        self.settings = settings
     }
 
     /// Fetches the status and settings again. Errors here aren't shown as action errors: if the backend
