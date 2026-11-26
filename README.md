@@ -25,11 +25,13 @@ The `scan` command passed its first real-console test on Assassin's Creed III (P
 
 Only exact 4-byte values work in the `scan` command for now.
 
-Phase 1 is in progress. The core scanning library has more value and compare types, unknown initial value snapshots, the result store, undo and wider console support. The backend API (`src/PS4Mem.Api`) now uses that library. It listens on 127.0.0.1:5080 only. It has endpoints for settings, connection, processes, sections, payload injection and scan sessions. The cheat list, locks and per-game cheat tables come next.
+Phase 1 (the backend API in `src/PS4Mem.Api`) is complete in code. It's waiting for the on-console API test. The API uses the core scanning library, which has more value and compare types, unknown initial value snapshots, the result store, undo and wider console support.
+
+The API listens on 127.0.0.1:5080 only. It has endpoints for settings, connection, processes, sections, payload injection, scan sessions, cheat lists and locks.
+
+Phase 2, the macOS app in `mac/`, isn't started yet.
 
 ## Planned features
-
-Phase 1 is a local API (ASP.NET Core, listening on localhost only). It injects the payload over the GoldHEN BinLoader, and it will save cheat tables per game, keyed by title ID.
 
 Phase 2 is a native macOS app written in SwiftUI, in the `mac/` folder. It talks to the local backend API. The finished app will be a double-clickable `PS4Mem.app` that contains the backend and starts and stops it itself, so you won't need a .NET install to run it.
 
@@ -182,7 +184,7 @@ To write a debug log without the flag, set `PS4MEM_DEBUG=1`. Logs go to `logs/`,
 
 ### Local API
 
-The local API (`src/PS4Mem.Api`) listens on 127.0.0.1:5080 only. It has endpoints for settings, connection, processes, sections, payload injection and scan sessions. Sample calls for each are in [`src/PS4Mem.Api/api.http`](src/PS4Mem.Api/api.http).
+The local API (`src/PS4Mem.Api`) listens on 127.0.0.1:5080 only. It has endpoints for settings, connection, processes, sections, payload injection, scan sessions and cheat lists. Sample calls for every endpoint are in [`src/PS4Mem.Api/api.http`](src/PS4Mem.Api/api.http).
 
 `POST /api/inject` does the same job as the `inject` command. The request body is optional. It takes `ip`, `payloadPath` and `loaderPort`. A path and port that work are saved in the settings.
 
@@ -216,6 +218,15 @@ If a game is left paused, for example after the connection dropped, `POST /api/p
 
 Disconnecting, or losing the connection, cancels a running scan and drops the scan results.
 
+#### Cheats
+
+Cheat lists are saved per game, by title ID, in `~/Library/Application Support/PS4Mem/cheats/<TITLEID>.json`.
+
+- Add, edit and delete cheats. A cheat has a description, an address, a section and offset, a type and a value.
+- Write a cheat's value to the game.
+- Lock a cheat. Its value is written again about every 200 ms until you unlock it. Disconnecting stops every lock.
+- Import and export a cheat list as JSON.
+
 ## How it works
 
 The app talks to the payload's command port (744). It uses the ps4debug wire protocol, which is documented in [`docs/protocol.md`](docs/protocol.md), with sources for each detail. The debugger port (755) is for the planned "find what writes to this address" feature, where the PS4 connects back to the Mac.
@@ -229,9 +240,9 @@ The console address is found in this order:
 
 There's no built-in address. If none is set, the CLI tells you how to set one.
 
-Safety: the app never writes to PS4 memory unless you ask it to, with a CLI command or a click in the interface.
+Safety: the app never writes to PS4 memory unless you ask it to. That means a CLI write, a write or lock request to the API, or a click in the interface.
 
-The planned design allows only one debugger at a time, and disconnecting will also release locks and the debugger. These rules apply once those features arrive.
+Disconnecting stops every lock and cancels a running scan. The planned design allows only one debugger at a time, and disconnecting will release the debugger too. Those rules apply once the debugger feature arrives.
 
 ### Defaults
 

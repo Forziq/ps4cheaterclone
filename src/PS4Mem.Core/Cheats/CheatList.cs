@@ -24,6 +24,18 @@ public sealed record CheatInput(
 /// <summary>What a cheat write did: the cheat (with its new value, if one was given) and the value it replaced.</summary>
 public sealed record CheatWrite(Cheat Cheat, string OldValue, CheatLockState? Lock);
 
+/// <summary>How an import treats the list already saved.</summary>
+public enum CheatImportMode
+{
+    /// <summary>Keep the saved cheats; add the imported ones. One with the id of a saved cheat replaces it, so importing a file twice adds nothing.</summary>
+    Merge,
+    /// <summary>The imported file becomes the whole list.</summary>
+    Replace,
+}
+
+/// <summary>What an import did.</summary>
+public sealed record CheatImport(CheatTable Table, int Added, int Replaced, int Removed);
+
 /// <summary>A cheat's current value in memory.</summary>
 public sealed record CheatValue(string Id, string Value);
 
@@ -175,6 +187,48 @@ public sealed class CheatList(CheatStore store, CheatLocks? locks = null, DebugL
             values.Add(new CheatValue(c.Id, Format(c.Type, bytes)));
         }
         return values;
+    }
+
+    /// <summary>The saved list as a cheat file (<see cref="CheatFormat"/>), for export.</summary>
+    public string Export(string titleId) => CheatFormat.Serialize(Get(titleId));
+
+    /// <summary>
+    /// Imports a cheat file into a game's list and saves it. Every cheat is checked first; a bad
+    /// one stops the import and nothing changes. Locks of removed cheats stop; locks of replaced
+    /// ones go on with the imported value. Writes no memory.
+    /// </summary>
+    /// <exception cref="FormatException">Not a cheat file, a bad cheat, or another game's title ID.</exception>
+    public CheatImport Import(string titleId, string json, CheatImportMode mode)
+    {
+        var title = CheatStore.NormalizeTitleId(titleId);
+        var imported = CheatFormat.Parse(json, title);
+        lock (_gate)
+        {
+            var table = store.Load(title);
+            var savedIds = table.Cheats.Select(c => c.Id).ToHashSet();
+            var importedIds = imported.Cheats.Select(c => c.Id).ToHashSet();
+            var replaced = imported.Cheats.Count(c => savedIds.Contains(c.Id));
+            var added = imported.Cheats.Count - replaced;
+
+            List<Cheat> cheats;
+            if (mode == CheatImportMode.Replace)
+                cheats = imported.Cheats.ToList();
+            else
+            {
+                var byId = imported.Cheats.ToDictionary(c => c.Id);
+                cheats = table.Cheats.Select(c => byId.GetValueOrDefault(c.Id, c)).ToList();
+                cheats.AddRange(imported.Cheats.Where(c => !savedIds.Contains(c.Id)));
+            }
+            var removed = table.Cheats.Where(c => !cheats.Any(n => n.Id == c.Id)).ToList();
+
+            var result = table with { Game = imported.Game ?? table.Game, Cheats = cheats };
+            store.Save(result);
+            foreach (var c in removed) locks?.Unlock(title, c.Id);
+            foreach (var c in imported.Cheats.Where(c => savedIds.Contains(c.Id))) locks?.Update(title, c);
+            Log.Info(Cat, $"{title}: imported {imported.Cheats.Count} cheats ({mode.ToString().ToLowerInvariant()}): " +
+                          $"{added} added, {replaced} replaced, {removed.Count} removed");
+            return new CheatImport(result, added, replaced, removed.Count);
+        }
     }
 
     private Cheat Find(string titleId, string id)

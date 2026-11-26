@@ -182,6 +182,45 @@ public sealed class CheatEndpointTests : IDisposable
         Assert.All(writes, w => Assert.Equal(0x1000UL, w.Address));
     }
 
+    [Fact]
+    public async Task Export_and_import_a_cheat_file()
+    {
+        await AddMoney();
+
+        var export = await _http.GetAsync($"/api/cheats/cusa11711/export");
+        export.EnsureSuccessStatusCode();
+        Assert.Equal("application/json", export.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("CUSA11711.json", export.Content.Headers.ContentDisposition?.FileNameStar ?? export.Content.Headers.ContentDisposition?.FileName);
+        var file = await export.Content.ReadAsStringAsync();
+        Assert.Contains("\"titleId\": \"CUSA11711\"", file);
+
+        // Merge of its own export changes nothing; into another game it's refused.
+        var merge = await (await _http.PostAsync($"/api/cheats/{Title}/import", Json(file))).Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("merge", merge.GetProperty("mode").GetString());
+        Assert.Equal(0, merge.GetProperty("added").GetInt32());
+        Assert.Equal(1, merge.GetProperty("replaced").GetInt32());
+        var wrongGame = await _http.PostAsync("/api/cheats/CUSA00001/import", Json(file));
+        Assert.Equal(HttpStatusCode.BadRequest, wrongGame.StatusCode);
+        Assert.Contains("for CUSA11711, not CUSA00001", await Error(wrongGame));
+
+        var replace = await _http.PostAsync($"/api/cheats/{Title}/import?mode=replace",
+            Json("""{"cheats": [{"description": "Ammo", "address": "0x2000", "type": "u16", "value": "99"}]}"""));
+        replace.EnsureSuccessStatusCode();
+        var replaced = await replace.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal((1, 1), (replaced.GetProperty("added").GetInt32(), replaced.GetProperty("removed").GetInt32()));
+        Assert.Equal("Ammo", Assert.Single(replaced.GetProperty("table").GetProperty("cheats").EnumerateArray())
+            .GetProperty("description").GetString());
+
+        var bad = await _http.PostAsync($"/api/cheats/{Title}/import?mode=sideways", Json(file));
+        Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+        Assert.Contains("Unknown import mode", await Error(bad));
+        var notJson = await _http.PostAsync($"/api/cheats/{Title}/import", Json("hello"));
+        Assert.Equal(HttpStatusCode.BadRequest, notJson.StatusCode);
+        Assert.Contains("Not a cheat file", await Error(notJson));
+    }
+
+    private static StringContent Json(string text) => new(text, Encoding.UTF8, "application/json");
+
     /// <summary>Serves reads and writes of 0x1000.. from <paramref name="memory"/> until CONSOLE_END.</summary>
     private static void ServeUntilEnd(FakeConsole c, byte[] memory, ConcurrentQueue<(ulong, byte[])> writes)
     {

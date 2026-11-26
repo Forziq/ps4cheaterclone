@@ -1,3 +1,4 @@
+using System.Text;
 using PS4Mem.Core;
 using PS4Mem.Core.Cheats;
 using PS4Mem.Core.Connection;
@@ -42,6 +43,9 @@ public sealed record CheatPidRequest(int? Pid);
 public sealed record CheatWriteDto(CheatDto Cheat, string OldValue);
 
 public sealed record CheatValueDto(string Id, string Value);
+
+/// <summary>What an import did, and the list as it is now.</summary>
+public sealed record CheatImportDto(string Mode, int Added, int Replaced, int Removed, CheatTableDto Table);
 
 /// <summary>Each cheat's current value in memory, in list order.</summary>
 public sealed record CheatValuesDto(string TitleId, int Pid, IReadOnlyList<CheatValueDto> Values);
@@ -101,6 +105,27 @@ public static class CheatEndpoints
             return Results.NoContent();
         });
 
+        // The saved list as a cheat file (the same JSON as the file on disk), to download as <TITLEID>.json.
+        app.MapGet("/api/cheats/{titleId}/export", (string titleId, CheatList cheats) =>
+        {
+            var title = CheatStore.NormalizeTitleId(titleId);
+            return Results.File(Encoding.UTF8.GetBytes(cheats.Export(title)), "application/json", $"{title}.json");
+        });
+
+        // Body: a cheat file (as export makes). ?mode=merge (default) adds to the list, and a cheat
+        // with a saved cheat's id replaces it; ?mode=replace makes the file the whole list.
+        // 200 with the counts and the list; 400 not a cheat file, a bad cheat or another game's file
+        // (nothing changes then). Writes no memory.
+        app.MapPost("/api/cheats/{titleId}/import", async (string titleId, string? mode, CheatList cheats, HttpRequest http) =>
+        {
+            using var reader = new StreamReader(http.Body, Encoding.UTF8);
+            var json = await reader.ReadToEndAsync(http.HttpContext.RequestAborted);
+            var importMode = ParseMode(mode);
+            var result = cheats.Import(titleId, json, importMode);
+            return new CheatImportDto(importMode.ToString().ToLowerInvariant(), result.Added, result.Replaced,
+                result.Removed, ToDto(result.Table, cheats));
+        });
+
         // ---- Memory: only on a click in the app ----------------------------------------------
 
         // Writes the cheat's value into the process (a value in the body is saved first).
@@ -145,6 +170,13 @@ public static class CheatEndpoints
                 values.Select(v => new CheatValueDto(v.Id, v.Value)).ToList());
         });
     }
+
+    private static CheatImportMode ParseMode(string? mode) => mode?.Trim().ToLowerInvariant() switch
+    {
+        null or "" or "merge" => CheatImportMode.Merge,
+        "replace" => CheatImportMode.Replace,
+        _ => throw new ArgumentException($"Unknown import mode '{mode}'. Use merge or replace."),
+    };
 
     private static readonly CheatRequest Empty = new(null, null, null, null, null, null, null, null);
 

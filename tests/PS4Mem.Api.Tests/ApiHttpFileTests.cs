@@ -28,6 +28,7 @@ public sealed partial class ApiHttpFileTests
         var mapsCalls = 0;
         var reads = new List<(ulong Address, int Length)>();
         var stops = new List<byte>();
+        var writes = new List<(ulong Address, byte[] Data)>();
 
         // The file injects first: the fake loader takes the payload and then "starts" ps4debug.
         var commandPort = FakeLoader.FreePort();
@@ -64,6 +65,13 @@ public sealed partial class ApiHttpFileTests
                 else if (r.Command == Ps4Command.ProcessStop)
                 {
                     stops.Add(r.Body[4]); // the status above is the whole reply
+                }
+                else if (r.Command == Ps4Command.ProcWrite) // cheats: the status above was the ack
+                {
+                    var data = c.ReadBytes((int)r.U32(12));
+                    data.CopyTo(memory.AsSpan((int)(r.U64(4) - Heap)));
+                    lock (writes) writes.Add((r.U64(4), data));
+                    c.SendStatus(Ps4Status.Success);
                 }
                 else
                 {
@@ -106,7 +114,8 @@ public sealed partial class ApiHttpFileTests
             // Server-sent events (scan progress): keep the last event's data.
             if (response.Content.Headers.ContentType?.MediaType == "text/event-stream")
                 text = text.Split('\n').Last(l => l.StartsWith("data: "))["data: ".Length..];
-            replies[r.Title] = JsonDocument.Parse(text).RootElement.Clone();
+            if (text.Length > 0) // 204 No Content has no body
+                replies[r.Title] = JsonDocument.Parse(text).RootElement.Clone();
         }
         Assert.NotNull(server);
         server.WaitForScript();
@@ -140,9 +149,11 @@ public sealed partial class ApiHttpFileTests
         Assert.Equal(2, Reply("Your own name filter").GetProperty("selectedCount").GetInt32());
         Assert.Equal(2, Reply("Select every section").GetProperty("selectedCount").GetInt32());
 
-        // Maps: three section calls and the first scan's. Reads: the first scan, the value refresh, the next scan.
+        // Maps: three section calls and the first scan's. Reads: the first scan, the value refresh, the next
+        // scan, then the cheats: their current values, and the old value before the write and the lock.
         Assert.Equal(4, mapsCalls);
-        Assert.Equal([(Heap, 0x10_0000), (Heap + 0x100, 0x104), (Heap + 0x100, 0x104)], reads);
+        Assert.Equal([(Heap, 0x10_0000), (Heap + 0x100, 0x104), (Heap + 0x100, 0x104),
+            (Heap + 0x100, 4), (Heap + 0x200, 4), (Heap + 0x100, 4), (Heap + 0x100, 4)], reads);
         Assert.Equal("first", Reply("First scan").GetProperty("kind").GetString());
         var progress = Reply("Scan progress");
         Assert.Equal("done", progress.GetProperty("state").GetString());
@@ -155,6 +166,26 @@ public sealed partial class ApiHttpFileTests
         Assert.Equal(1, Reply("Undo the last scan").GetProperty("scanNumber").GetInt32());
         Assert.Equal(0, Reply("New scan").GetProperty("resultCount").GetInt64());
         Assert.True(Reply("Resume the game").GetProperty("resumed").GetBoolean());
+
+        // Cheats: the import's fixed id, the write and the lock went to the money's address.
+        Assert.Equal(1, Reply("Import a cheat list").GetProperty("added").GetInt32());
+        Assert.Equal("a1b2c3d4", Reply("The game's cheat list").GetProperty("cheats")[0].GetProperty("id").GetString());
+        Assert.Equal("0x200", Reply("Add a cheat").GetProperty("sectionOffset").GetString());
+        Assert.Equal(["1500", "1500"], Reply("Current values of every cheat").GetProperty("values").EnumerateArray()
+            .Select(v => v.GetProperty("value").GetString()));
+        Assert.Equal("1500", Reply("Write a cheat's value").GetProperty("oldValue").GetString());
+        Assert.True(Reply("Lock a cheat").GetProperty("locked").GetBoolean());
+        Assert.False(Reply("Unlock it").GetProperty("locked").GetBoolean());
+        Assert.Equal("Money (max)", Reply("Edit a cheat").GetProperty("description").GetString());
+        Assert.Equal(2, Reply("Export the game's").GetProperty("cheats").GetArrayLength());
+        Assert.Equal(2, Reply("Every game with").GetProperty("games")[0].GetProperty("count").GetInt32());
+        Assert.True(writes.Count >= 2); // the write, the lock's first write, and any repeats before the unlock
+        Assert.All(writes, w =>
+        {
+            Assert.Equal(Heap + 0x100, w.Address);
+            Assert.Equal([0x3F, 0x42, 0x0F, 0x00], w.Data); // 999999
+        });
+        Assert.Equal(999_999u, BinaryPrimitives.ReadUInt32LittleEndian(memory.AsSpan(0x100)));
         Assert.Equal([(byte)0], stops); // the resume call; the sample scans don't pause
 
         Assert.False(Reply("Disconnect").GetProperty("connected").GetBoolean());

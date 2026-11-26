@@ -205,4 +205,68 @@ public sealed class CheatListTests : IDisposable
         var e = Assert.Throws<FormatException>(() => CheatFormat.Parse(json, Title));
         Assert.Contains(message, e.Message);
     }
+
+    [Fact]
+    public void Export_then_import_into_another_folder_gives_the_same_list()
+    {
+        _list.Add(Title, new CheatInput("Money", "0x2001A3F10", "u32", "999", SectionStart: "0x200000000", Section: "", Game: "AC3"));
+        _list.Add(Title, new CheatInput("Name", "0x3000", "string", "Ezio"));
+        var json = _list.Export("cusa11711");
+
+        var other = new CheatList(new CheatStore(Path.Combine(_dir, "other")));
+        var import = other.Import(Title, json, CheatImportMode.Merge);
+
+        Assert.Equal((2, 0, 0), (import.Added, import.Replaced, import.Removed));
+        Assert.Equal(_list.Get(Title).Cheats, other.Get(Title).Cheats);
+        Assert.Equal("AC3", other.Get(Title).Game);
+    }
+
+    [Fact]
+    public void Merge_adds_new_cheats_and_replaces_ones_with_the_same_id()
+    {
+        var money = _list.Add(Title, new CheatInput("Money", "0x1000", "u32", "999"));
+        var json = $$"""
+            { "titleId": "CUSA11711", "cheats": [
+                { "id": "{{money.Id}}", "description": "Money 2", "address": "0x1000", "type": "u32", "value": "5" },
+                { "description": "Ammo", "address": "0x2000", "type": "u16", "value": "99" } ] }
+            """;
+
+        var import = _list.Import(Title, json, CheatImportMode.Merge);
+        Assert.Equal((1, 1, 0), (import.Added, import.Replaced, import.Removed));
+        Assert.Equal(["Money 2", "Ammo"], _list.Get(Title).Cheats.Select(c => c.Description));
+
+        // An exported file has every id, so importing it again adds nothing.
+        var again = _list.Import(Title, _list.Export(Title), CheatImportMode.Merge);
+        Assert.Equal((0, 2, 0), (again.Added, again.Replaced, again.Removed));
+        Assert.Equal(2, _list.Get(Title).Cheats.Count);
+    }
+
+    [Fact]
+    public void Replace_makes_the_file_the_whole_list()
+    {
+        _list.Add(Title, new CheatInput("Money", "0x1000", "u32", "999"));
+        _list.Add(Title, new CheatInput("Ammo", "0x2000", "u32", "1"));
+
+        var import = _list.Import(Title, """{"cheats": [{"address": "0x3000", "type": "f32", "value": "1.5"}]}""", CheatImportMode.Replace);
+
+        Assert.Equal((1, 0, 2), (import.Added, import.Replaced, import.Removed));
+        var cheat = Assert.Single(_list.Get(Title).Cheats);
+        Assert.Equal(0x3000UL, cheat.Address);
+        Assert.Equal("1.5", cheat.Value);
+    }
+
+    [Fact]
+    public void A_bad_import_changes_nothing()
+    {
+        _list.Add(Title, new CheatInput("Money", "0x1000", "u32", "999"));
+        var before = File.ReadAllText(_store.PathFor(Title));
+
+        Assert.Throws<FormatException>(() => _list.Import(Title,
+            """{"cheats": [{"address": "0x3000", "type": "u32", "value": "1"}, {"address": "0x3004", "type": "u8", "value": "300"}]}""",
+            CheatImportMode.Replace));
+        Assert.Throws<FormatException>(() => _list.Import(Title, """{"titleId": "CUSA00001", "cheats": []}""", CheatImportMode.Merge));
+        Assert.Throws<FormatException>(() => _list.Import(Title, "not json", CheatImportMode.Merge));
+
+        Assert.Equal(before, File.ReadAllText(_store.PathFor(Title)));
+    }
 }

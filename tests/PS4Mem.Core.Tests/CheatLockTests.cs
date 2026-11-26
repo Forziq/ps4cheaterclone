@@ -188,6 +188,23 @@ public sealed class CheatLockTests : IDisposable
     }
 
     [Fact]
+    public void An_import_updates_replaced_locks_and_stops_removed_ones()
+    {
+        var money = AddMoney();
+        var ammo = _list.Add(Title, new CheatInput("Ammo", "0x4000", "u32", "99"));
+        _list.Lock(Title, money.Id, Pid, _memory);
+        _list.Lock(Title, ammo.Id, Pid, _memory);
+
+        _list.Import(Title, $$"""{"cheats": [{"id": "{{money.Id}}", "address": "0x2001A3F10", "type": "u32", "value": "5"}]}""",
+            CheatImportMode.Replace);
+
+        Assert.Null(_list.LockOf(Title, ammo.Id));
+        Assert.True(_list.LockOf(Title, money.Id)!.Locked);
+        _memory.SetU32(0x2001A3F10, 0);
+        Assert.True(SpinWait.SpinUntil(() => _memory.GetU32(0x2001A3F10) == 5, Wait));
+    }
+
+    [Fact]
     public void Locks_are_per_title_id()
     {
         var a = AddMoney();

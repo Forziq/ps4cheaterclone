@@ -1,12 +1,16 @@
 # PS4 Mem API sample calls (VS Code REST Client, JetBrains HTTP client or Visual Studio).
 # Start the API first:  dotnet run --project src/PS4Mem.Api
-# Errors come back as {"error": "..."}: 400 bad input, 409 not connected / already connected,
+# Errors come back as {"error": "..."}: 400 bad input, 404 no such cheat, 409 not connected / already connected,
 # 502 the PS4 refused or didn't answer.
 # The tests replay this file top to bottom against a fake console, so keep every call working.
 
 @host = http://127.0.0.1:5080
 # A pid from GET /api/processes (the game you chose).
 @pid = 85
+# The game's title ID, from GET /api/processes/{pid}. Cheat lists are saved per title ID.
+@titleId = CUSA11711
+# A cheat id from the game's cheat list (the import below makes this one).
+@cheat = a1b2c3d4
 
 ### Connection state, and the IP a connect would use
 GET {{host}}/api/status
@@ -108,6 +112,87 @@ POST {{host}}/api/scan/cancel
 
 ### New scan: drops every result
 POST {{host}}/api/scan/new
+
+### Import a cheat list into the game's list (title ID from the process info). ?mode=merge (the
+# default) adds to the saved list, and a cheat with a saved cheat's id replaces it; ?mode=replace
+# makes the file the whole list. The body is a cheat file, as export makes. Writes no memory.
+POST {{host}}/api/cheats/{{titleId}}/import?mode=merge
+Content-Type: application/json
+
+{
+  "format": 1,
+  "titleId": "{{titleId}}",
+  "game": "ac3_engine_orbis_fn.elf",
+  "cheats": [
+    { "id": "{{cheat}}", "description": "Money", "address": "0x200000100", "type": "u32", "value": "1500",
+      "section": "", "sectionStart": "0x200000000" }
+  ]
+}
+
+### The game's cheat list (saved in ~/Library/Application Support/PS4Mem/cheats/<TITLEID>.json).
+# Each row has "locked", and "lockError" when a lock stopped because a write failed.
+GET {{host}}/api/cheats/{{titleId}}
+
+### Add a cheat, e.g. a results row the user double-clicked: its address, section and section
+# start, the scan type and a value. "hex": true reads the value as hex. 201 with its new id.
+POST {{host}}/api/cheats/{{titleId}}
+Content-Type: application/json
+
+{
+  "description": "Ammo",
+  "address": "0x200000200",
+  "type": "u32",
+  "value": "1500",
+  "section": "",
+  "sectionStart": "0x200000000"
+}
+
+### Current values of every cheat, read from the PS4 now (reads only)
+POST {{host}}/api/cheats/{{titleId}}/values
+Content-Type: application/json
+
+{
+  "pid": {{pid}}
+}
+
+### Write a cheat's value into the game. A "value" is saved as the cheat's value first; without
+# one the saved value is written. Returns the cheat and the value it replaced ("oldValue").
+POST {{host}}/api/cheats/{{titleId}}/{{cheat}}/write
+Content-Type: application/json
+
+{
+  "pid": {{pid}},
+  "value": "999999"
+}
+
+### Lock a cheat: written now, then every ~200 ms until unlock, delete or disconnect
+POST {{host}}/api/cheats/{{titleId}}/{{cheat}}/lock
+Content-Type: application/json
+
+{
+  "pid": {{pid}}
+}
+
+### Unlock it (fine when it isn't locked; needs no connection)
+POST {{host}}/api/cheats/{{titleId}}/{{cheat}}/unlock
+
+### Edit a cheat: only the fields you send change ("" clears section or sectionStart). Writes
+# no memory, but a locked cheat goes on writing its new value.
+PUT {{host}}/api/cheats/{{titleId}}/{{cheat}}
+Content-Type: application/json
+
+{
+  "description": "Money (max)"
+}
+
+### Export the game's cheat list as a file (<TITLEID>.json)
+GET {{host}}/api/cheats/{{titleId}}/export
+
+### Every game with a saved cheat list
+GET {{host}}/api/cheats
+
+### Delete a cheat (204; a locked cheat is unlocked first)
+DELETE {{host}}/api/cheats/{{titleId}}/{{cheat}}
 
 ### Resume the game if it was left paused (scans with pauseGame resume it themselves; this is
 # for a game left stopped, e.g. after the connection dropped mid-scan)
