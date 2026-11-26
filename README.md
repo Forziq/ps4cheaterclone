@@ -1,11 +1,129 @@
 # PS4 Mem
 
-A macOS memory editor for a jailbroken PS4, in the style of PS4Cheater. It talks to the
-ps4debug (ps4debug-NG) payload over the LAN to list processes, scan memory, and edit values.
+PS4 Mem is PS4Cheater for macOS: a memory editor for a jailbroken PS4. It talks to the ps4debug-NG payload over your local network to list processes, scan a game's memory and edit values.
 
-> Work in progress: Phase 0 (a .NET console app that proves scanning works).
+It's for your own console and single-player games. See the disclaimer below.
 
-## Layout
+## Status
+
+Phase 0 is in progress. This is a .NET console app that checks scanning works before the web interface is built.
+
+Working now:
+
+- Connecting to the payload and reading its version.
+- Listing processes with the `info` command. Tested on a real console running ps4debug-NG v1.3, with 66 processes listed.
+
+The protocol client also includes process info (title ID), memory maps, chunked reads and writes. The CLI doesn't expose these yet.
+
+Next: a process picker and section selection, then a 4-byte first and next scan, and writing a value.
+
+## Planned features
+
+Phase 1 is a local API (ASP.NET Core, listening on localhost only). It will inject the payload over the GoldHEN BinLoader and save cheat tables per game, keyed by title ID.
+
+Phase 2 is a web interface built with Next.js. It will have:
+
+- A connection bar and a process picker that suggests the game.
+- A sections panel with a name filter.
+- A scanner for 1, 2, 4 and 8-byte signed and unsigned values, float, double, strings and byte arrays with `??` wildcards. Scan types include exact, bigger, smaller, between, increased, decreased, changed, unchanged and unknown initial value. It will support undo, progress and cancel.
+- A results table and a cheat list with lock, and JSON import and export.
+
+After that, the plan includes export to the GoldHEN cheat JSON format, a hex viewer and editor with disassembly, a "find what writes to this address" tool using a hardware watchpoint, and a pointer scanner.
+
+## Requirements
+
+- A Mac with the .NET 10 SDK.
+- A jailbroken PS4 running GoldHEN, with BinLoader enabled on port 9090.
+- The ps4debug-NG payload `.bin`. It's a third-party binary and isn't included in this repo. Get it from the ps4debug-NG releases and put it in `payloads/`. The default file name is `ps4debug-ng_v1.3.4_release_2026-11-05.bin`.
+- The Mac and the PS4 on the same network.
+
+## Setup
+
+1. Clone the repo, then copy the example IP file and set your PS4's address:
+
+   ```bash
+   cp ps4ip.example ps4ip.local
+   ```
+
+   Edit `ps4ip.local` and set `PS4_IP=` to your PS4's IP address. The file is git-ignored, so the address stays on your machine.
+
+2. Build and run the tests:
+
+   ```bash
+   dotnet build
+   dotnet test
+   ```
+
+The tests don't need a console. The protocol code runs against a fake TCP server.
+
+## Usage
+
+Phase 0 needs the payload loaded by hand. From Phase 1 the app will do this itself.
+
+1. Check whether the payload is already running. Replace `$PS4_IP` with your PS4's address, or set `PS4_IP` in your shell first:
+
+   ```bash
+   nc -z -G 2 $PS4_IP 744 && echo "already running"
+   ```
+
+2. If it isn't running, send the payload to BinLoader:
+
+   ```bash
+   nc -w 3 $PS4_IP 9090 < payloads/ps4debug-ng_v1.3.4_release_2026-11-05.bin
+   ```
+
+   BinLoader takes one payload per session. Wait about 10 seconds before you connect.
+
+3. Print the ps4debug version and the process list. This command only reads:
+
+   ```bash
+   dotnet run --project src/PS4Mem.Cli -- info
+   ```
+
+   Options:
+
+   - `--ip <ip>` sets the console address.
+   - `--port <port>` sets the command port.
+   - `--debug` writes a debug log.
+
+   Options can go anywhere on the command line, for example:
+
+   ```bash
+   dotnet run --project src/PS4Mem.Cli -- info --ip <PS4_IP> --debug
+   ```
+
+To write a debug log without the flag, set `PS4MEM_DEBUG=1`. Logs go to `logs/`, which is git-ignored. Attach the log when you report a problem.
+
+## How it works
+
+The app talks to the payload's command port (744). It uses the ps4debug wire protocol, which is documented in [`docs/protocol.md`](docs/protocol.md), with sources for each detail. The debugger port (755) is for the planned "find what writes to this address" feature, where the PS4 connects back to the Mac.
+
+The console address is found in this order:
+
+1. The `--ip` option.
+2. The `PS4_IP` environment variable.
+3. `ps4ip.local`, in the current folder or a parent folder.
+4. The `consoleIp` setting in `~/Library/Application Support/PS4Mem/settings.json`.
+
+There's no built-in address. If none is set, the CLI tells you how to set one.
+
+Safety: the app never writes to PS4 memory unless you ask it to, with a CLI command or a click in the interface.
+
+The planned design allows only one debugger at a time, and disconnecting will release locks, the debugger and any scans. These rules apply once those features arrive.
+
+### Defaults
+
+All defaults are in `src/PS4Mem.Core/PS4MemSettings.cs`, and you can override each one:
+
+- Command port: 744.
+- Debugger port: 755.
+- GoldHEN BinLoader port: 9090.
+- Payload path: `payloads/ps4debug-ng_v1.3.4_release_2026-11-05.bin`.
+- Read chunk size: 32 MB.
+- Section name filter: `anon`, `exe`, `Game`, `dlmalloc` and `SmallBlockAllocator`.
+- Connect timeout: 5 seconds. Reads have no timeout, because scans can take minutes.
+
+### Layout
 
 | Path | What |
 |---|---|
@@ -14,18 +132,24 @@ ps4debug (ps4debug-NG) payload over the LAN to list processes, scan memory, and 
 | `tests/PS4Mem.Core.Tests` | xUnit tests (protocol code runs against a fake TCP server) |
 | `docs/protocol.md` | ps4debug wire protocol, with sources |
 
-## Build
+## Credits
 
-Needs the .NET 10 SDK.
+- [ps4debug-NG](https://github.com/Pharaoh2k/ps4debug-NG) by Pharaoh2k (GPL-3.0). The debugger payload this app talks to. Its source is the reference for the wire protocol.
+- [ps4debug](https://github.com/jogolden/ps4debug) by golden (jogolden). The original payload.
+- [libdebug](https://github.com/a0zhar/libdebug) by a0zhar. A C# ps4debug client, used as a protocol reference.
+- [PS4Cheater](https://github.com/ctn123/PS4_Cheater) by ctn123. The tool this project is modelled on.
+- [PS4CheaterNeo](https://github.com/avan06/PS4CheaterNeo) by avan06. A protocol and scanning reference.
+- [GoldHEN](https://github.com/GoldHEN/GoldHEN). The homebrew enabler, with BinLoader.
+- [GoldHEN Cheat Repository](https://github.com/GoldHEN/GoldHEN_Cheat_Repository). The cheat format for the planned export.
 
-```bash
-dotnet build
-dotnet test
-```
+No code is copied from libdebug, PS4Cheater or PS4CheaterNeo, because they don't have a licence. The client is written from the documented protocol.
 
-## Defaults
+## Disclaimer
 
-All defaults live in `src/PS4Mem.Core/PS4MemSettings.cs` and can be overridden:
-console IP `192.168.0.99`, command port 744, debugger port 755, GoldHEN BinLoader port 9090.
+Use PS4 Mem only on your own console, and only with offline or single-player games. Don't use it to cheat online.
 
-The ps4debug-NG payload `.bin` is a third-party binary and is not committed.
+PS4 Mem is not affiliated with or endorsed by Sony Interactive Entertainment. Editing memory can crash the game or the console. Use it at your own risk.
+
+## Licence
+
+GNU GPL-3.0. See [LICENSE](LICENSE).
