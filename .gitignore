@@ -1,0 +1,23 @@
+# .NET
+bin/
+obj/
+*.user
+.vs/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+web/.env*
+
+# Project
+ref/
+payloads/*.bin
+*.spill
+*.snapshot
+.env*
+.DS_Store
+.claude/settings.local.json
+
+# Debug logs (PS4MEM_DEBUG / --debug)
+logs/
