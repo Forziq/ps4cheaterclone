@@ -50,15 +50,18 @@ public sealed class ScanEngine
     private readonly DebugLog _log;
     private readonly ISectionScanner _local;
     private readonly ISectionScanner? _console;
+    private readonly ScanStorage? _storage;
 
+    /// <param name="storage">Where big result sets spill to disk; null keeps everything in memory.</param>
     public ScanEngine(IProcessMemory memory, PS4MemSettings? settings = null, DebugLog? log = null,
-        ISectionScanner? consoleScanner = null)
+        ISectionScanner? consoleScanner = null, ScanStorage? storage = null)
     {
         _memory = memory;
         _settings = settings ?? PS4MemSettings.Default;
         _log = log ?? DebugLog.Disabled;
         _local = new LocalSectionScanner(memory, _settings);
         _console = consoleScanner;
+        _storage = storage;
     }
 
     public bool HasConsoleScanner => _console is not null;
@@ -103,7 +106,7 @@ public sealed class ScanEngine
                        $"alignment {alignment}, {list.Count} sections, {totalBytes} bytes");
 
         var watch = Stopwatch.StartNew();
-        var hits = new ScanHitBuffer(size);
+        using var hits = NewBuffer(size);
         var stats = new List<SectionScanStats>(list.Count);
         long done = 0;
         try
@@ -144,6 +147,7 @@ public sealed class ScanEngine
         ScanOptions? options = null, CancellationToken cancel = default)
     {
         options ??= new ScanOptions();
+        ObjectDisposedException.ThrowIf(previous.IsDisposed, previous);
         if (!query.Compare.AllowedOnNextScan())
             throw new ArgumentException($"'{query.Compare.ShortName()}' is for a first scan only.");
         if (query.Type != previous.Type)
@@ -159,9 +163,8 @@ public sealed class ScanEngine
                        $"{previous.Count} previous results in {previous.Sections.Count(s => s.Hits > 0)} sections");
 
         var watch = Stopwatch.StartNew();
-        var hits = new ScanHitBuffer(size, Math.Max(16, previous.Count / 4));
+        using var hits = NewBuffer(size, (int)Math.Min(int.MaxValue / 16, Math.Max(16, previous.Count / 4)));
         var stats = new List<SectionScanStats>(previous.Sections.Count);
-        var addresses = previous.Addresses;
         var buffer = Array.Empty<byte>();
         long checkedCount = 0, reads = 0;
         try
@@ -176,15 +179,16 @@ public sealed class ScanEngine
                     cancel.ThrowIfCancellationRequested();
 
                     // Grow the batch while the next hit is close and the read stays small enough.
-                    var batchStart = addresses[i];
+                    var batchStart = previous.AddressAt(i);
                     var batchEnd = batchStart + (ulong)size;
                     var j = i + 1;
                     // Addresses are sorted; unaligned hits can overlap the batch end (gap 0).
-                    while (j < end
-                           && (addresses[j] > batchEnd ? addresses[j] - batchEnd : 0) <= maxGap
-                           && addresses[j] + (ulong)size - batchStart <= maxBatch)
+                    while (j < end)
                     {
-                        batchEnd = Math.Max(batchEnd, addresses[j] + (ulong)size);
+                        var next = previous.AddressAt(j);
+                        if ((next > batchEnd ? next - batchEnd : 0) > maxGap || next + (ulong)size - batchStart > maxBatch)
+                            break;
+                        batchEnd = Math.Max(batchEnd, next + (ulong)size);
                         j++;
                     }
 
@@ -195,11 +199,12 @@ public sealed class ScanEngine
 
                     for (var k = i; k < j; k++)
                     {
-                        var current = buffer.AsSpan((int)(addresses[k] - batchStart), size);
+                        var address = previous.AddressAt(k);
+                        var current = buffer.AsSpan((int)(address - batchStart), size);
                         // A string / byte array exact scan may change the length; then the old value isn't used.
                         var before = previous.ValueSize == size ? previous.ValueAt(k) : default;
                         if (matcher.IsMatch(current, before))
-                            hits.Add(addresses[k], current);
+                            hits.Add(address, current);
                     }
 
                     checkedCount += j - i;
@@ -219,6 +224,9 @@ public sealed class ScanEngine
         return Finish(pid, previous.ScanNumber + 1, "local", query, hits, stats, watch.Elapsed);
     }
 
+    private ScanHitBuffer NewBuffer(int valueSize, int capacity = 1024) =>
+        new(valueSize, capacity, _storage, _settings.ScanSpillRows);
+
     private SectionScanStats SectionFinished(SectionScanStats s, ScanOptions options)
     {
         _log.Info(Cat, $"section '{s.Section.Name}' start 0x{s.Section.Start:X} size 0x{s.Section.Size:X}: " +
@@ -230,18 +238,17 @@ public sealed class ScanEngine
     private ScanResults Finish(int pid, int number, string method, ScanQuery query, ScanHitBuffer hits,
         List<SectionScanStats> stats, TimeSpan elapsed)
     {
-        var (addresses, values) = hits.ToArrays();
-        _log.Info(Cat, $"Scan #{number} ({method}) done: {addresses.Length} results in " +
-                       $"{stats.Count(s => s.Hits > 0)}/{stats.Count} sections, {elapsed.TotalMilliseconds:0} ms");
-        return new ScanResults
+        var spilled = hits.Spilled;
+        var columns = hits.Complete();
+        _log.Info(Cat, $"Scan #{number} ({method}) done: {columns.Count} results in " +
+                       $"{stats.Count(s => s.Hits > 0)}/{stats.Count} sections, {elapsed.TotalMilliseconds:0} ms" +
+                       (spilled ? " (stored on disk)" : ""));
+        return new ScanResults(columns)
         {
             Pid = pid,
             ScanNumber = number,
             Method = method,
             Query = query,
-            ValueSize = hits.ValueSize,
-            Addresses = addresses,
-            Values = values,
             Sections = stats,
             Elapsed = elapsed,
         };

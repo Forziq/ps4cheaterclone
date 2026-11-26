@@ -79,6 +79,23 @@ public sealed record PS4MemSettings
     public int NextScanMaxGapBytes { get; init; } = 64 * 1024;
 
     /// <summary>
+    /// Scan results above this many rows are written to disk instead of kept in memory
+    /// (unknown initial value scans can find millions). 2M rows of a 4-byte scan is 24 MB.
+    /// </summary>
+    public long ScanSpillRows { get; init; } = 2_000_000;
+
+    /// <summary>
+    /// Folder for spilled results and unknown-initial snapshots. Empty means
+    /// <c>~/Library/Application Support/PS4Mem/scans</c> (<see cref="Scanning.ScanStorage.DefaultRoot"/>).
+    /// Each run uses its own subfolder and deletes it on exit; leftovers of runs that crashed are
+    /// deleted at the next start.
+    /// </summary>
+    public string ScanDataDirectory { get; init; } = "";
+
+    /// <summary>How many scans "undo" can go back. Each kept scan may hold disk space.</summary>
+    public int ScanUndoLevels { get; init; } = 1;
+
+    /// <summary>
     /// Sections whose name contains any of these are selected by default
     /// (PS4Cheater's approach; see PROMPT.md §3.3).
     /// </summary>

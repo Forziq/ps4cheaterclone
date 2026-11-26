@@ -178,7 +178,7 @@ public class ScanTypesEngineTests
         var r = new ScanEngine(mem, Small).FirstScan(Pid, [Sec("a", 0x1002, 0x40)],
             Q(ScanValueType.UInt32, ScanCompare.BiggerThan, "4"));
 
-        Assert.Equal(0x1004UL, r.Addresses[0]);
+        Assert.Equal(0x1004UL, r.AddressAt(0));
     }
 
     [Fact]
@@ -350,9 +350,8 @@ public class ScanTypesEngineTests
         hits.Add(0x20, [2, 2]);
         hits.SortFrom(0);
 
-        var (addresses, values) = hits.ToArrays();
-        Assert.Equal([0x10UL, 0x20, 0x30], addresses);
-        Assert.Equal([1, 1, 2, 2, 3, 3], values);
+        Assert.Equal([0x10UL, 0x20, 0x30], Enumerable.Range(0, 3).Select(i => hits.AddressAt(i)));
+        Assert.Equal([1, 1, 2, 2, 3, 3], Enumerable.Range(0, 3).SelectMany(i => hits.ValueAt(i).ToArray()));
         Assert.Throws<ArgumentException>(() => hits.Add(0x40, [1, 2, 3]));
     }
 

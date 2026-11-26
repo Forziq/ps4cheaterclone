@@ -99,6 +99,8 @@ public sealed class ConsoleSectionScanner : ISectionScanner
         var needle = query.Value!.Bytes;
         var value = BinaryPrimitives.ReadUInt32LittleEndian(needle);
         var first = hits.Count;
+        var last = 0UL;
+        var inOrder = true;
 
         for (var pos = section.Start; pos < section.End;)
         {
@@ -115,12 +117,21 @@ public sealed class ConsoleSectionScanner : ISectionScanner
                     var found = BinaryPrimitives.ReadUInt32LittleEndian(bytes);
                     if (found != value) // exact compare on the console; this would be a server bug
                         _log.Warn(Cat, $"console returned 0x{piece + offset:X} = {found}, not {value}; kept");
-                    hits.Add(piece + offset, bytes[..ValueSize]);
+                    var address = piece + offset;
+                    inOrder &= hits.Count == first || address > last;
+                    last = address;
+                    hits.Add(address, bytes[..ValueSize]);
                 });
 
             pos += own;
             bytesDone(own);
         }
+        if (inOrder) return;
+        if (hits.SpilledCount > first)
+            throw new Ps4ProtocolException(
+                $"The console returned {hits.Count - first} hits for '{section.Name}' out of address order, too many to sort " +
+                "in memory; use local scan.");
+        _log.Info(Cat, $"console hits for '{section.Name}' came out of order; sorted");
         hits.SortFrom(first);
     }
 }

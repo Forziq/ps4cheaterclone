@@ -55,7 +55,8 @@ internal static class ScanCommand
             }
 
             var method = ChooseMethod(client, settings, log, options.Method);
-            var engine = new ScanEngine(client, settings, log, method.Console);
+            using var storage = new ScanStorage(settings.ScanDataDirectory, log);
+            var engine = new ScanEngine(client, settings, log, method.Console, storage);
             var scanOptions = new ScanOptions
             {
                 Method = method.Console is null ? ScanMethod.Local : ScanMethod.Console,
@@ -132,6 +133,19 @@ internal static class ScanCommand
         List<Section> sections, ScanOptions scanOptions, ScanCancelHandler cancel, DebugLog log)
     {
         ScanResults? results = null;
+        try
+        {
+            Loop(client, engine, editor, pid, sections, scanOptions, cancel, log, ref results);
+        }
+        finally
+        {
+            results?.Dispose(); // frees memory and deletes spilled files
+        }
+    }
+
+    private static void Loop(PS4DebugClient client, ScanEngine engine, MemoryEditor editor, int pid,
+        List<Section> sections, ScanOptions scanOptions, ScanCancelHandler cancel, DebugLog log, ref ScanResults? results)
+    {
         Console.WriteLine();
         Console.WriteLine("Enter a value to scan for (decimal, or 0x hex). Commands: l = list, w <n> <value> = write, new, q = quit.");
 
@@ -149,6 +163,7 @@ internal static class ScanCommand
                 case "q" or "quit" or "exit":
                     return;
                 case "new":
+                    results?.Dispose();
                     results = null;
                     Console.WriteLine("Results cleared. Enter a value for a new first scan.");
                     continue;
@@ -167,9 +182,10 @@ internal static class ScanCommand
                 continue;
             }
 
-            var next = cancel.RunScan(token => results is null
+            var previous = results;
+            var next = cancel.RunScan(token => previous is null
                 ? engine.FirstScan(pid, sections, value, WithScreen(scanOptions, firstScan: true), token)
-                : engine.NextScan(results, value, WithScreen(scanOptions, firstScan: false), token));
+                : engine.NextScan(previous, value, WithScreen(scanOptions, firstScan: false), token));
             if (next is null)
             {
                 Console.WriteLine();
@@ -177,6 +193,7 @@ internal static class ScanCommand
                 continue;
             }
 
+            results?.Dispose();
             results = next;
             Console.WriteLine();
             var withHits = results.Sections.Count(s => s.Hits > 0);
@@ -221,9 +238,9 @@ internal static class ScanCommand
         var now = new byte[4];
         for (var i = 0; i < count; i++)
         {
-            client.ReadMemory(pid, results.Addresses[i], now);
+            client.ReadMemory(pid, results.AddressAt(i), now);
             var current = BinaryPrimitives.ReadUInt32LittleEndian(now);
-            Console.WriteLine($"  {i,4}  {results.Addresses[i],12:X}  {results.FormatValue(i),12}  {current,12}  {results.SectionOf(i).DisplayName}");
+            Console.WriteLine($"  {i,4}  {results.AddressAt(i),12:X}  {results.FormatValue(i),12}  {current,12}  {results.SectionOf(i).DisplayName}");
         }
         if (results.Count > count)
             Console.WriteLine($"  ... and {results.Count - count:N0} more.");
@@ -247,7 +264,7 @@ internal static class ScanCommand
             return;
         }
 
-        var address = results.Addresses[n];
+        var address = results.AddressAt(n);
         try
         {
             var old = editor.WriteUInt32(pid, address, value);
