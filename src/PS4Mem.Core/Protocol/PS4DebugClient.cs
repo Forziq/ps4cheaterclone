@@ -198,7 +198,8 @@ public sealed class PS4DebugClient : IDisposable
             if (map.End <= map.Start)
             {
                 skipped++;
-                _log.Warn(Cat, $"Skipping map '{map.Name}' 0x{map.Start:X}-0x{map.End:X} {map.ProtText}: end <= start");
+                // Category "maps", next to SectionFilter's keep/skip lines for the other maps.
+                _log.Warn("maps", $"skip '{map.Name}' 0x{map.Start:X}-0x{map.End:X} {map.ProtText} (0x{map.Prot:X}): end <= start");
                 continue;
             }
             maps.Add(map);

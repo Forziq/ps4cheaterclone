@@ -238,7 +238,7 @@ public class PS4DebugClientTests
         Assert.Equal("r-x", maps[0].ProtText);
         Assert.True(maps[1].IsWritable);
         Assert.Equal(0x10000000UL, maps[1].Size);
-        Assert.Contains("Skipping map 'broken_end_zero'", sw.ToString());
+        Assert.Contains("[maps] skip 'broken_end_zero'", sw.ToString());
         Assert.Contains("4 maps received, 2 kept, 2 skipped", sw.ToString());
     }
 

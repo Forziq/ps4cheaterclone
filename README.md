@@ -12,10 +12,12 @@ Working now:
 
 - Connecting to the payload and reading its version.
 - Listing processes with the `info` command. Tested on a real console running ps4debug-NG v1.3, with 66 processes listed.
+- A process picker, which finds the game process.
+- Section selection with the `sections` command. It lists the memory sections a scan will use, and only reads.
 
-The protocol client also includes process info (title ID), memory maps, chunked reads and writes. The CLI doesn't expose these yet.
+The protocol client also includes chunked reads and writes. The CLI doesn't expose these yet.
 
-Next: a process picker and section selection, then a 4-byte first and next scan, and writing a value.
+Next: scanning, starting with a 4-byte first and next scan. Writing a value comes after that.
 
 ## Planned features
 
@@ -91,6 +93,28 @@ Phase 0 needs the payload loaded by hand. From Phase 1 the app will do this itse
    ```bash
    dotnet run --project src/PS4Mem.Cli -- info --ip <PS4_IP> --debug
    ```
+
+4. List the game process and its memory sections. This command only reads:
+
+   ```bash
+   dotnet run --project src/PS4Mem.Cli -- sections --ip <PS4_IP>
+   ```
+
+   If `ps4ip.local` holds your address, you can leave out `--ip`.
+
+   The command picks the game process. It takes `eboot.bin`, or else a `.elf` that isn't a system process. It prints the process's title ID, then lists the readable memory sections with their name, start, end, size and protection. A ✓ marks the sections a scan will use. The last line gives the number of selected sections out of the total, and their size in bytes.
+
+   By default, a scan uses the writable sections whose name contains `anon`, `exe`, `Game`, `dlmalloc` or `SmallBlockAllocator`. The match ignores case. Memory maps are skipped and logged if their end is at or before their start, if they are over 64 GB, if they are duplicates, or if they can't be read.
+
+   Options:
+
+   - `--pid <pid>` picks the process by its ID.
+   - `--name <name>` picks the process by name. Use the exact name or a part that matches only one process.
+   - `--filter a,b,c` sets the section name filter, as a comma-separated list. Use `--filter ""` to match any name.
+   - `--include-readonly` also selects read-only sections.
+   - `--all` selects every readable section. It ignores the name filter and the writable rule.
+
+   With `--debug`, the log includes the `picker` and `maps` categories.
 
 To write a debug log without the flag, set `PS4MEM_DEBUG=1`. Logs go to `logs/`, which is git-ignored. Attach the log when you report a problem.
 
