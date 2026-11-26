@@ -1,0 +1,16 @@
+# PS4 Mem API sample calls (VS Code REST Client, JetBrains HTTP client or Visual Studio).
+# Start the API first:  dotnet run --project src/PS4Mem.Api
+
+@host = http://127.0.0.1:5080
+
+### Saved settings
+GET {{host}}/api/settings
+
+### Change some settings (only the fields you send change)
+PUT {{host}}/api/settings
+Content-Type: application/json
+
+{
+  "loaderPort": 9090,
+  "debugLogging": false
+}

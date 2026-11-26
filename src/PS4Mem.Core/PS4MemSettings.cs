@@ -95,5 +95,14 @@ public sealed record PS4MemSettings
     /// <summary>How many bytes of each protocol message the debug log hex-dumps.</summary>
     public int DebugWireDumpBytes { get; init; } = 256;
 
+    /// <summary>
+    /// Where the backend API listens. Loopback only: the API can write to PS4 memory, so
+    /// nothing else on the network may reach it. Override with <c>--urls</c> (still loopback only).
+    /// </summary>
+    public string ApiUrl { get; init; } = "http://127.0.0.1:5080";
+
+    /// <summary>How many recently used console IPs the app settings remember.</summary>
+    public int MaxRecentIps { get; init; } = 8;
+
     public static PS4MemSettings Default { get; } = new();
 }

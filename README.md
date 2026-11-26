@@ -6,7 +6,7 @@ It's for your own console and single-player games. See the disclaimer below.
 
 ## Status
 
-Phase 0 has passed its first real-console test. This is a .NET console app that checks scanning works before the web interface is built.
+Phase 0 has passed its first real-console test. It's a .NET console app that checks scanning works before the Phase 2 app is built.
 
 Working now:
 
@@ -22,13 +22,15 @@ The `scan` command passed its first real-console test on Assassin's Creed III (P
 
 Only exact 4-byte (32-bit) values work for now. Other value types and compare types come later.
 
-Next: Phase 1, a local web API for settings, connection, payload injection, more value types and the cheat list.
+Phase 1 has started. The backend API (`src/PS4Mem.Api`) listens on 127.0.0.1:5080 only, and it has settings endpoints so far. Connection, process and map endpoints are next, then payload injection, more value types and the cheat list.
 
 ## Planned features
 
 Phase 1 is a local API (ASP.NET Core, listening on localhost only). It will inject the payload over the GoldHEN BinLoader and save cheat tables per game, keyed by title ID.
 
-Phase 2 is a web interface built with Next.js. It will have:
+Phase 2 is a native macOS app written in SwiftUI, in the `mac/` folder. It talks to the local backend API. The finished app will be a double-clickable `PS4Mem.app` that contains the backend and starts and stops it itself, so you won't need a .NET install to run it.
+
+It will have:
 
 - A connection bar and a process picker that suggests the game.
 - A sections panel with a name filter.
@@ -39,7 +41,8 @@ After that, the plan includes export to the GoldHEN cheat JSON format, a hex vie
 
 ## Requirements
 
-- A Mac with the .NET 10 SDK.
+- A Mac with the .NET 10 SDK, to build and run the current CLI and API. The finished app won't need it.
+- Swift, to build the Phase 2 app in `mac/`. The Xcode Command Line Tools are enough. Full Xcode is optional.
 - A jailbroken PS4 running GoldHEN, with BinLoader enabled on port 9090.
 - The ps4debug-NG payload `.bin`. It's a third-party binary and isn't included in this repo. Get it from the ps4debug-NG releases and put it in `payloads/`. The default file name is `ps4debug-ng_v1.3.4_release_2026-11-05.bin`.
 - The Mac and the PS4 on the same network.
@@ -190,6 +193,8 @@ All defaults are in `src/PS4Mem.Core/PS4MemSettings.cs`, and you can override ea
 |---|---|
 | `src/PS4Mem.Core` | Protocol client, scanning, cheats |
 | `src/PS4Mem.Cli` | Console app |
+| `src/PS4Mem.Api` | Local backend API (ASP.NET Core), listens on 127.0.0.1:5080 only |
+| `mac/` | Planned SwiftUI macOS app (Phase 2) |
 | `tests/PS4Mem.Core.Tests` | xUnit tests (protocol code runs against a fake TCP server) |
 | `docs/protocol.md` | ps4debug wire protocol, with sources |
 
