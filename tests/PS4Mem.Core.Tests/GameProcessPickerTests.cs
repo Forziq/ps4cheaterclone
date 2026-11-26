@@ -122,4 +122,34 @@ public class GameProcessPickerTests
         Assert.EndsWith("Type the pid.", ambiguous.Reason);
         Assert.Null(GameProcessPicker.Choose(SystemOnly, "", GameProcessPicker.Pick(SystemOnly)).Process);
     }
+
+    [Fact]
+    public void Shows_only_the_suggested_game_by_default()
+    {
+        var suggestion = GameProcessPicker.Pick(Ac3);
+        var shown = GameProcessPicker.ProcessesToShow(Ac3, suggestion, showAll: false);
+        Assert.Equal([suggestion.Process!], shown);
+    }
+
+    [Fact]
+    public void Shows_every_process_by_pid_when_asked_or_with_no_suggestion()
+    {
+        var suggestion = GameProcessPicker.Pick(Ac3);
+        var all = GameProcessPicker.ProcessesToShow(Ac3, suggestion, showAll: true);
+        Assert.Equal(Ac3.Count, all.Count);
+        Assert.Equal(Ac3.OrderBy(p => p.Pid).Select(p => p.Pid), all.Select(p => p.Pid));
+
+        var none = GameProcessPicker.Pick(SystemOnly);
+        Assert.Equal(SystemOnly.Length, GameProcessPicker.ProcessesToShow(SystemOnly, none, showAll: false).Count);
+    }
+
+    [Theory]
+    [InlineData("list", true)]
+    [InlineData(" LIST ", true)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    [InlineData("85", false)]
+    [InlineData("lis", false)]
+    public void List_command_is_recognised(string? input, bool expected) =>
+        Assert.Equal(expected, GameProcessPicker.IsListCommand(input));
 }

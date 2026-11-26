@@ -61,6 +61,23 @@ public static class GameProcessPicker
         return pick;
     }
 
+    /// <summary>Typed at the process prompt to show every process instead of only the suggested game.</summary>
+    public const string ListCommand = "list";
+
+    public static bool IsListCommand(string? input) =>
+        string.Equals(input?.Trim(), ListCommand, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The processes to print at the prompt: only the suggested game, so the user isn't shown 60+
+    /// system processes. Every process (by pid) when <paramref name="showAll"/> is set or there's
+    /// no suggestion, since the user then has to pick one themselves.
+    /// </summary>
+    public static IReadOnlyList<ProcessEntry> ProcessesToShow(
+        IReadOnlyList<ProcessEntry> processes, ProcessPick suggestion, bool showAll) =>
+        showAll || suggestion.Process is null
+            ? processes.OrderBy(p => p.Pid).ToList()
+            : [suggestion.Process];
+
     private static void Log(DebugLog log, IReadOnlyList<ProcessEntry> processes, ProcessPick pick)
     {
         var who = pick.Process is { } p ? $"'{p.Name}' pid {p.Pid}" : "nothing";

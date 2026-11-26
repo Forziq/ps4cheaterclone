@@ -77,9 +77,10 @@ internal static class ScanCommand
     }
 
     /// <summary>
-    /// Lists every process with the suggested game marked, and lets the user choose: Return takes
-    /// the suggestion, or type a pid or a name. The picker only suggests. <c>--pid</c>/<c>--name</c>
-    /// skip the question. Used by <c>scan</c> and <c>sections</c>.
+    /// Shows only the suggested game (every process if there's no suggestion) and lets the user
+    /// choose: Return takes the suggestion, <c>list</c> shows every process, or type a pid or a name.
+    /// The picker only suggests. <c>--pid</c>/<c>--name</c> skip the question. Used by <c>scan</c>
+    /// and <c>sections</c>.
     /// </summary>
     internal static ProcessPick ChooseProcess(IReadOnlyList<ProcessEntry> processes, PS4MemSettings settings,
         DebugLog log, int? pid = null, string? name = null)
@@ -88,26 +89,42 @@ internal static class ScanCommand
             return GameProcessPicker.Pick(processes, settings, pid, name, log);
 
         var suggestion = GameProcessPicker.Pick(processes, settings, log: log);
-        Console.WriteLine($"{processes.Count} processes (→ = suggested):");
-        Console.WriteLine($"  {"PID",7}  NAME");
-        foreach (var p in processes.OrderBy(p => p.Pid))
-        {
-            var mark = p == suggestion.Process ? $"   → suggested: {suggestion.Reason}" : "";
-            Console.WriteLine($"  {p.Pid,7}  {p.Name}{mark}");
-        }
+        PrintProcesses(processes, suggestion, showAll: false);
         if (suggestion.Process is null)
             Console.WriteLine($"No suggestion: {suggestion.Reason}");
 
         while (true)
         {
-            var hint = suggestion.Process is { } s ? $"Return = {s.Name} ({s.Pid}), or type a pid or name" : "type a pid or name";
+            var hint = suggestion.Process is { } s
+                ? $"Return = {s.Name} ({s.Pid}), {GameProcessPicker.ListCommand} = show all {processes.Count}, or type a pid or name"
+                : "type a pid or name";
             Console.Write($"Process to scan ({hint})> ");
             var input = Console.ReadLine();
             if (input is null) return new ProcessPick(null, "no input");
             log.Info("cli", $"process input: '{input}'");
+            if (GameProcessPicker.IsListCommand(input))
+            {
+                PrintProcesses(processes, suggestion, showAll: true);
+                continue;
+            }
             var pick = GameProcessPicker.Choose(processes, input, suggestion, settings, log);
             if (pick.Process is not null) return pick;
             Console.WriteLine(pick.Reason);
+        }
+    }
+
+    private static void PrintProcesses(IReadOnlyList<ProcessEntry> processes, ProcessPick suggestion, bool showAll)
+    {
+        var shown = GameProcessPicker.ProcessesToShow(processes, suggestion, showAll);
+        var hidden = processes.Count - shown.Count;
+        Console.WriteLine(hidden == 0
+            ? $"{processes.Count} processes (→ = suggested):"
+            : $"Suggested game ({hidden} other processes hidden; type `{GameProcessPicker.ListCommand}` to show them):");
+        Console.WriteLine($"  {"PID",7}  NAME");
+        foreach (var p in shown)
+        {
+            var mark = p == suggestion.Process ? $"   → suggested: {suggestion.Reason}" : "";
+            Console.WriteLine($"  {p.Pid,7}  {p.Name}{mark}");
         }
     }
 
