@@ -21,6 +21,8 @@ final class AppModel {
     let processes: ProcessModel
     /// The sections panel for the chosen process.
     let sections: SectionsModel
+    /// The scanner (and, through it, the results). The backend keeps one set of results per connection.
+    let scan: ScanModel
 
     // MARK: Connection state
 
@@ -48,6 +50,7 @@ final class AppModel {
         self.inject = InjectModel(client: client)
         self.processes = ProcessModel(client: client)
         self.sections = SectionsModel(client: client)
+        self.scan = ScanModel(client: client)
         self.statusPollInterval = statusPollInterval
     }
 
@@ -141,9 +144,15 @@ final class AppModel {
         status = newStatus
         if newStatus.connected && !wasConnected {
             await processes.load()
+            // Results the backend still has (or a scan still running) show up again. Not awaited:
+            // following a running scan lasts as long as the scan.
+            let scan = self.scan
+            Task { await scan.refresh() }
         } else if !newStatus.connected && wasConnected {
             processes.clear()
             sections.clear()
+            // The backend drops the results and cancels a scan on disconnect.
+            scan.clear()
         }
     }
 

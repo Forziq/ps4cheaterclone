@@ -152,3 +152,162 @@ struct SectionList: Codable, Equatable {
     /// Maps left out of the list (end <= start, too big, duplicates, unreadable).
     var skippedMaps: Int
 }
+
+// MARK: Scans
+// Source of truth: src/PS4Mem.Api/ScanEndpoints.cs (FirstScanRequest, NextScanRequest, ScanStatusDto,
+// SectionHitsDto, ScanResultDto, ScanResultsDto, ResultValuesRequest, ResultValuesDto).
+
+/// Body of `POST /api/scan/first`. Nil fields are left out and use the backend's defaults.
+struct FirstScanRequest: Encodable, Equatable {
+    var pid: Int
+    /// u8, i8, u16, i16, u32, i32, u64, i64, f32, f64, string, bytes.
+    var type: String
+    /// exact, bigger than, smaller than, between, unknown initial value.
+    var compare: String
+    var value: String?
+    /// The second value of "between".
+    var value2: String?
+    /// Read the typed numbers as hex.
+    var hex: Bool
+    /// Start addresses ("0x...") of the ticked sections.
+    var sections: [String]
+    /// false scans every byte; true uses the alignment setting (4 bytes, less for small types).
+    var aligned: Bool
+    /// Stop the game while scanning (it is always resumed afterwards).
+    var pauseGame: Bool
+}
+
+/// Body of `POST /api/scan/next`. The type can't change after the first scan, so it isn't sent.
+struct NextScanRequest: Encodable, Equatable {
+    /// Also increased, increased by, decreased, decreased by, changed, unchanged.
+    var compare: String
+    var value: String?
+    var value2: String?
+    var hex: Bool
+    var pauseGame: Bool
+}
+
+/// Hits of one section in the current results.
+struct SectionHits: Codable, Equatable {
+    var name: String
+    var start: String
+    var size: UInt64
+    var hits: Int64
+    var milliseconds: Double
+}
+
+/// The running or last scan and the current results. Sent by every scan endpoint and by the
+/// progress stream (`GET /api/scan/progress`).
+struct ScanStatus: Codable, Equatable {
+    /// idle, running, done, cancelled or failed.
+    var state: String
+    /// "first" or "next" while/after a scan.
+    var kind: String?
+    /// The query as text, e.g. "u32 exact 100".
+    var query: String?
+    var method: String?
+    var percent: Double
+    /// The section being scanned now.
+    var section: String?
+    /// Bytes scanned so far, of `total`.
+    var done: Int64
+    var total: Int64
+    /// Hits found so far by the running scan.
+    var hits: Int64
+    var elapsedSeconds: Double
+    /// Why a scan failed or was cancelled, or a note (e.g. the console method fell back to local).
+    var message: String?
+    var gamePaused: Bool
+    /// The process the results belong to.
+    var pid: Int?
+    /// 0 = no results. Goes up with every scan and changes on undo.
+    var scanNumber: Int
+    var resultCount: Int64
+    /// The results' value type ("u32" ...). Fixed until a new scan.
+    var type: String?
+    var valueSize: Int
+    var resultMethod: String?
+    var canUndo: Bool
+    /// Hits per section of the current results.
+    var sections: [SectionHits]?
+
+    var isRunning: Bool { state == "running" }
+    var hasResults: Bool { scanNumber > 0 }
+
+    static let idle = ScanStatus(state: "idle", kind: nil, query: nil, method: nil, percent: 0, section: nil,
+                                 done: 0, total: 0, hits: 0, elapsedSeconds: 0, message: nil, gamePaused: false,
+                                 pid: nil, scanNumber: 0, resultCount: 0, type: nil, valueSize: 0,
+                                 resultMethod: nil, canUndo: false, sections: nil)
+}
+
+/// One results row. `value` is what the last scan found (the "previous value" column).
+struct ScanResultRow: Codable, Equatable {
+    var index: Int64
+    var address: String
+    var value: String
+    var section: String
+    var sectionStart: String
+    var sectionOffset: String
+}
+
+/// `GET /api/scan/results`: a page of rows. `total` is every result.
+struct ScanResultsPage: Codable, Equatable {
+    var scanNumber: Int
+    var type: String?
+    var valueSize: Int
+    var total: Int64
+    var offset: Int64
+    var count: Int
+    var results: [ScanResultRow]
+}
+
+/// Body of `POST /api/scan/results/values`: which rows to read again from the PS4.
+struct ResultValuesRequest: Encodable, Equatable {
+    var offset: Int64
+    var limit: Int
+    var hex: Bool
+}
+
+struct ResultValue: Codable, Equatable {
+    var index: Int64
+    var address: String
+    var value: String
+}
+
+/// The current values of the rows asked for. `scanNumber` says which results they belong to.
+struct ResultValues: Codable, Equatable {
+    var scanNumber: Int
+    var offset: Int64
+    var values: [ResultValue]
+}
+
+// MARK: Cheats (only what the scanner needs; the cheat list is T2.4)
+// Source of truth: src/PS4Mem.Api/CheatEndpoints.cs (CheatRequest, CheatDto).
+
+/// Body of `POST /api/cheats/{titleId}`. Adding a cheat only saves it: it doesn't write memory.
+struct NewCheatRequest: Encodable, Equatable {
+    var description: String?
+    var address: String
+    var type: String
+    var value: String
+    var hex: Bool
+    var section: String?
+    var sectionStart: String?
+    var game: String?
+}
+
+/// One cheat as the backend sends it.
+struct Cheat: Codable, Equatable, Identifiable {
+    var id: String
+    var description: String
+    var address: String
+    var section: String?
+    var sectionStart: String?
+    var sectionOffset: String?
+    var type: String
+    var value: String
+    var locked: Bool
+    var lockPid: Int?
+    var lockWrites: Int64?
+    var lockError: String?
+}

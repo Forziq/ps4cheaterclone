@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The main window: backend state, connection bar, process picker, sections panel, and (in later steps)
-/// the scan and cheat panels.
+/// The main window: backend state, connection bar, process picker, sections panel and scanner, and
+/// (in a later step) the cheat list.
 struct ContentView: View {
     let model: AppModel
     @State private var showingInject = false
@@ -42,7 +42,13 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .padding()
         } else {
-            SectionsPanel(sections: model.sections, processText: model.processes.chosenText)
+            VSplitView {
+                SectionsPanel(sections: model.sections, processText: model.processes.chosenText)
+                    .frame(minHeight: 180, idealHeight: 260)
+                ScannerPanel(scan: model.scan, pid: model.processes.chosen?.pid,
+                             sections: model.sections.selectedStarts)
+                    .frame(minHeight: 200, maxHeight: .infinity, alignment: .top)
+            }
         }
     }
 

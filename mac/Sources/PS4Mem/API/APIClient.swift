@@ -75,6 +75,96 @@ struct APIClient {
         return try await send("GET", "/api/processes/\(pid)/maps", query: query)
     }
 
+    // MARK: Scans
+
+    /// Starts a first scan. It runs in the backend; follow it with `scanProgress()`.
+    func firstScan(_ request: FirstScanRequest) async throws -> ScanStatus {
+        try await send("POST", "/api/scan/first", body: request)
+    }
+
+    /// Starts a next scan on the current results.
+    func nextScan(_ request: NextScanRequest) async throws -> ScanStatus {
+        try await send("POST", "/api/scan/next", body: request)
+    }
+
+    /// Cancels a running scan and drops every result.
+    func newScan() async throws -> ScanStatus { try await send("POST", "/api/scan/new") }
+
+    /// Back to the results before the last next scan.
+    func undoScan() async throws -> ScanStatus { try await send("POST", "/api/scan/undo") }
+
+    /// Asks the running scan to stop; the previous results stay.
+    func cancelScan() async throws -> ScanStatus { try await send("POST", "/api/scan/cancel") }
+
+    func scanStatus() async throws -> ScanStatus { try await send("GET", "/api/scan/status") }
+
+    /// A page of results: rows `offset ..< offset + limit`. `hex` shows the values in hex.
+    func scanResults(offset: Int64, limit: Int, hex: Bool) async throws -> ScanResultsPage {
+        try await send("GET", "/api/scan/results", query: [
+            URLQueryItem(name: "offset", value: String(offset)),
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "hex", value: hex ? "true" : "false"),
+        ])
+    }
+
+    /// Reads the current values of rows `offset ..< offset + limit` from the PS4 (a read, never a write).
+    func resultValues(_ request: ResultValuesRequest) async throws -> ResultValues {
+        try await send("POST", "/api/scan/results/values", body: request)
+    }
+
+    /// The scan's progress as it happens, from the server-sent events at `GET /api/scan/progress`:
+    /// one status per "progress" event, then the final status ("done" event), then the stream ends.
+    /// If no scan is running, it gives the "done" status at once.
+    func scanProgress() -> AsyncThrowingStream<ScanEvent, Error> {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/scan/progress"),
+                                 timeoutInterval: Self.progressTimeout)
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        let session = self.session
+
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let (bytes, response) = try await session.bytes(for: request)
+                    guard let http = response as? HTTPURLResponse else {
+                        throw APIError.badResponse("not an HTTP response")
+                    }
+                    guard (200..<300).contains(http.statusCode) else {
+                        throw APIError.server(status: http.statusCode, message: "HTTP \(http.statusCode) from the progress stream")
+                    }
+                    var parser = ServerSentEvents()
+                    for try await line in bytes.lines {
+                        guard let event = parser.feed(line) else { continue }
+                        guard let status = try? JSONDecoder().decode(ScanStatus.self, from: Data(event.data.utf8)) else {
+                            throw APIError.badResponse("progress event: \(event.data)")
+                        }
+                        let scanEvent = ScanEvent(isDone: event.name == "done", status: status)
+                        continuation.yield(scanEvent)
+                        if scanEvent.isDone { break }
+                    }
+                    continuation.finish()
+                } catch let error as APIError {
+                    continuation.finish(throwing: error)
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: APIError.unreachable(error.localizedDescription))
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// The progress stream sends an event every 250 ms while a scan runs, so a minute without one
+    /// means the backend is stuck or gone. (This is the gap allowed between events, not a scan time limit.)
+    static let progressTimeout: TimeInterval = 60
+
+    // MARK: Cheats
+
+    /// Adds a cheat to a game's list (saved on the Mac; nothing is written to the PS4).
+    func addCheat(titleId: String, _ request: NewCheatRequest) async throws -> Cheat {
+        try await send("POST", "/api/cheats/\(titleId)", body: request)
+    }
+
     // MARK: Plumbing
 
     /// A call without a body.
