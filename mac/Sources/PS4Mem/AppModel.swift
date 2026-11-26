@@ -25,6 +25,8 @@ final class AppModel {
     let scan: ScanModel
     /// The results table (the first 5,000 results, current values of the rows on screen).
     let results: ResultsModel
+    /// The chosen game's cheat list (one per title ID, saved by the backend).
+    let cheats: CheatListModel
 
     // MARK: Connection state
 
@@ -55,6 +57,10 @@ final class AppModel {
         self.scan = ScanModel(client: client)
         let results = ResultsModel(client: client)
         self.results = results
+        let cheats = CheatListModel(client: client)
+        self.cheats = cheats
+        // Cheats added from the results show up in the list.
+        results.onCheatsAdded = { await cheats.reload() }
         // After a scan, undo or new scan, the table loads the new results' first page.
         scan.onResultsChanged = { status in await results.reload(status: status) }
         self.statusPollInterval = statusPollInterval
@@ -72,6 +78,11 @@ final class AppModel {
             guard let self else { return false }
             return self.status.connected && !self.scan.isRunning && !self.scan.isBusy
         }
+        // The cheats' values in memory, every second, under the same conditions.
+        cheats.startRefreshing { [weak self] in
+            guard let self else { return false }
+            return self.status.connected && !self.scan.isRunning && !self.scan.isBusy
+        }
     }
 
     /// Called when the app quits (also on Ctrl+C in the terminal).
@@ -79,6 +90,7 @@ final class AppModel {
         pollTask?.cancel()
         pollTask = nil
         results.stopRefreshing()
+        cheats.stopRefreshing()
         backend.stop()
     }
 
@@ -166,6 +178,8 @@ final class AppModel {
             // The backend drops the results and cancels a scan on disconnect.
             scan.clear()
             results.clear()
+            // The backend stops every lock on disconnect.
+            cheats.clear()
         }
     }
 
@@ -177,6 +191,16 @@ final class AppModel {
             return
         }
         if sections.pid != pid { await sections.load(pid: pid) }
+    }
+
+    /// Keeps the cheat list on the chosen process's game: shows its list, or clears it when no
+    /// process is chosen.
+    func syncCheatsWithChosenProcess() async {
+        guard let chosen = processes.chosen else {
+            cheats.clear()
+            return
+        }
+        await cheats.show(titleId: chosen.titleId, game: chosen.name, pid: chosen.pid)
     }
 
     /// The chosen game's title ID, when the results belong to the chosen process (cheats from the

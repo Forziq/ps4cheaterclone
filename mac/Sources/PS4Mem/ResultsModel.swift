@@ -56,6 +56,8 @@ final class ResultsModel {
     private(set) var error: String?
     /// What the last double-click did, e.g. "Added 0x2001A3F10 to the cheat list of CUSA11711".
     private(set) var notice: String?
+    /// Called after cheats were added, so the cheat list shows them.
+    var onCheatsAdded: (@MainActor () async -> Void)?
 
     /// At most this many rows are fetched (PROMPT: "show first ~5,000 but keep all").
     let maxShown: Int
@@ -227,6 +229,7 @@ final class ResultsModel {
         if !added.isEmpty {
             let what = added.count == 1 ? added[0] : "\(added.count) addresses"
             notice = "Added \(what) to the cheat list of \(titleId)"
+            await onCheatsAdded?()
         }
     }
 

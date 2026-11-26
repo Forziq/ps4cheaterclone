@@ -281,8 +281,8 @@ struct ResultValues: Codable, Equatable {
     var values: [ResultValue]
 }
 
-// MARK: Cheats (only what the scanner needs; the cheat list is T2.4)
-// Source of truth: src/PS4Mem.Api/CheatEndpoints.cs (CheatRequest, CheatDto).
+// MARK: Cheats
+// Source of truth: src/PS4Mem.Api/CheatEndpoints.cs (CheatRequest, CheatDto and the other records there).
 
 /// Body of `POST /api/cheats/{titleId}`. Adding a cheat only saves it: it doesn't write memory.
 struct NewCheatRequest: Encodable, Equatable {
@@ -310,4 +310,66 @@ struct Cheat: Codable, Equatable, Identifiable {
     var lockPid: Int?
     var lockWrites: Int64?
     var lockError: String?
+}
+
+/// Body of `PUT /api/cheats/{titleId}/{id}`: only the fields that are set change (nil ones aren't sent).
+/// Saving an edit doesn't write memory (a locked cheat goes on writing its new value).
+struct CheatEdit: Encodable, Equatable {
+    var description: String?
+    var value: String?
+    var hex: Bool?
+}
+
+/// Body of `POST .../write`: the process to write to, and optionally a new value (saved first).
+struct CheatWriteRequest: Encodable, Equatable {
+    var pid: Int
+    var value: String?
+    var hex: Bool?
+}
+
+/// Body of `POST .../lock` and `POST /api/cheats/{titleId}/values`.
+struct CheatPidRequest: Encodable, Equatable {
+    var pid: Int
+}
+
+/// What a write did: the cheat as it is now and the value it replaced in memory.
+struct CheatWriteResult: Codable, Equatable {
+    var cheat: Cheat
+    var oldValue: String
+}
+
+/// A game's cheat list and the file it's saved in (`GET /api/cheats/{titleId}`).
+struct CheatTable: Codable, Equatable {
+    var titleId: String
+    var game: String?
+    var file: String
+    var cheats: [Cheat]
+}
+
+struct CheatValue: Codable, Equatable {
+    var id: String
+    var value: String
+}
+
+/// Each cheat's value in memory now, in list order (`POST /api/cheats/{titleId}/values`).
+struct CheatValues: Codable, Equatable {
+    var titleId: String
+    var pid: Int
+    var values: [CheatValue]
+}
+
+/// What an import did, and the list as it is now.
+struct CheatImportResult: Codable, Equatable {
+    var mode: String
+    var added: Int
+    var replaced: Int
+    var removed: Int
+    var table: CheatTable
+}
+
+/// How an imported file joins the list: added to it (a cheat with a saved cheat's id replaces it),
+/// or made the whole list.
+enum CheatImportMode: String, CaseIterable {
+    case merge
+    case replace
 }

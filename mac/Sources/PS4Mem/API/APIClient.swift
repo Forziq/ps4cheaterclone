@@ -165,6 +165,54 @@ struct APIClient {
         try await send("POST", "/api/cheats/\(titleId)", body: request)
     }
 
+    /// A game's cheat list (empty if none is saved yet).
+    func cheats(titleId: String) async throws -> CheatTable { try await send("GET", "/api/cheats/\(titleId)") }
+
+    /// Saves changed fields of a cheat. Doesn't write memory.
+    func updateCheat(titleId: String, id: String, _ edit: CheatEdit) async throws -> Cheat {
+        try await send("PUT", "/api/cheats/\(titleId)/\(id)", body: edit)
+    }
+
+    /// Deletes a cheat (a locked one is unlocked first). The backend answers 204 with no body.
+    func deleteCheat(titleId: String, id: String) async throws {
+        _ = try await sendForData("DELETE", "/api/cheats/\(titleId)/\(id)", query: [], bodyData: nil,
+                                  timeout: Self.normalTimeout)
+    }
+
+    /// **Writes memory.** Only call this from a click (Return in the value field).
+    func writeCheat(titleId: String, id: String, _ request: CheatWriteRequest) async throws -> CheatWriteResult {
+        try await send("POST", "/api/cheats/\(titleId)/\(id)/write", body: request)
+    }
+
+    /// **Writes memory** now and every ~200 ms until unlocked. Only call this from a click.
+    func lockCheat(titleId: String, id: String, pid: Int) async throws -> Cheat {
+        try await send("POST", "/api/cheats/\(titleId)/\(id)/lock", body: CheatPidRequest(pid: pid))
+    }
+
+    /// Stops a lock (fine if it wasn't locked).
+    func unlockCheat(titleId: String, id: String) async throws -> Cheat {
+        try await send("POST", "/api/cheats/\(titleId)/\(id)/unlock")
+    }
+
+    /// Reads every cheat's value from the process (a read, never a write).
+    func cheatValues(titleId: String, pid: Int) async throws -> CheatValues {
+        try await send("POST", "/api/cheats/\(titleId)/values", body: CheatPidRequest(pid: pid))
+    }
+
+    /// The saved list as a cheat file (the same JSON as the file on disk).
+    func exportCheats(titleId: String) async throws -> Data {
+        try await sendForData("GET", "/api/cheats/\(titleId)/export", query: [], bodyData: nil,
+                              timeout: Self.normalTimeout)
+    }
+
+    /// Imports a cheat file (as export makes). Writes no memory.
+    func importCheats(titleId: String, file: Data, mode: CheatImportMode) async throws -> CheatImportResult {
+        let data = try await sendForData("POST", "/api/cheats/\(titleId)/import",
+                                         query: [URLQueryItem(name: "mode", value: mode.rawValue)],
+                                         bodyData: file, timeout: Self.normalTimeout)
+        return try decode(data, "POST /api/cheats/\(titleId)/import")
+    }
+
     // MARK: Plumbing
 
     /// A call without a body.
@@ -185,6 +233,21 @@ struct APIClient {
 
     private func send<Response: Decodable>(_ method: String, _ path: String, query: [URLQueryItem],
                                            bodyData: Data?, timeout: TimeInterval) async throws -> Response {
+        let data = try await sendForData(method, path, query: query, bodyData: bodyData, timeout: timeout)
+        return try decode(data, "\(method) \(path)")
+    }
+
+    private func decode<Response: Decodable>(_ data: Data, _ what: String) throws -> Response {
+        do {
+            return try JSONDecoder().decode(Response.self, from: data)
+        } catch {
+            throw APIError.badResponse("\(what): \(error)")
+        }
+    }
+
+    /// Sends a request and returns the body of a 2xx answer as it is (the other calls decode it).
+    private func sendForData(_ method: String, _ path: String, query: [URLQueryItem],
+                             bodyData: Data?, timeout: TimeInterval) async throws -> Data {
         var url = baseURL.appendingPathComponent(path)
         if !query.isEmpty, var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) {
             parts.queryItems = query
@@ -212,11 +275,7 @@ struct APIClient {
         guard (200..<300).contains(http.statusCode) else {
             throw APIError.server(status: http.statusCode, message: Self.errorMessage(data, status: http.statusCode))
         }
-        do {
-            return try JSONDecoder().decode(Response.self, from: data)
-        } catch {
-            throw APIError.badResponse("\(method) \(path): \(error)")
-        }
+        return data
     }
 
     /// The `error` text from `{"error": "..."}`, or the raw body if it isn't that shape.

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The main window: backend state, connection bar, process picker, sections panel and scanner, and
-/// (in a later step) the cheat list.
+/// The main window: backend state, connection bar, process picker, sections panel, scanner with its
+/// results, and the chosen game's cheat list.
 struct ContentView: View {
     let model: AppModel
     @State private var showingInject = false
@@ -15,6 +15,7 @@ struct ContentView: View {
                 HSplitView {
                     ProcessPicker(processes: model.processes, onChoose: { _ in
                         await model.syncSectionsWithChosenProcess()
+                        await model.syncCheatsWithChosenProcess()
                     })
                         .frame(minWidth: 240, idealWidth: 300, maxWidth: 420)
                     sectionsArea
@@ -22,7 +23,10 @@ struct ContentView: View {
                 }
                 // A refresh can drop the chosen process (the game was closed): clear or reload the sections.
                 .onChange(of: model.processes.chosen?.pid) {
-                    Task { await model.syncSectionsWithChosenProcess() }
+                    Task {
+                        await model.syncSectionsWithChosenProcess()
+                        await model.syncCheatsWithChosenProcess()
+                    }
                 }
             } else {
                 placeholder
@@ -55,6 +59,9 @@ struct ContentView: View {
                 .frame(minHeight: 300, maxHeight: .infinity, alignment: .top)
                 // The hex box also switches the results to hex (the backend formats the values).
                 .onChange(of: model.scan.hex) { Task { await model.results.setHex(model.scan.hex) } }
+                CheatListPanel(cheats: model.cheats)
+                    .padding(12)
+                    .frame(minHeight: 160, idealHeight: 220)
             }
         }
     }
