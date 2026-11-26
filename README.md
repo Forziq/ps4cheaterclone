@@ -6,23 +6,23 @@ It's for your own console and single-player games. See the disclaimer below.
 
 ## Status
 
-Phase 0 is in progress. This is a .NET console app that checks scanning works before the web interface is built.
+Phase 0 has passed its first real-console test. This is a .NET console app that checks scanning works before the web interface is built.
 
 Working now:
 
 - Connecting to the payload and reading its version.
 - Listing processes with the `info` command. Tested on a real console running ps4debug-NG v1.3, with 66 processes listed.
-- A process picker. It lists every process and suggests the game, marked `→ suggested:`. You choose.
+- A process picker. It shows only the suggested game, marked `→ suggested:`. Press Return to take it. Type `list` to see every process, or type a pid or a name.
 - Section selection with the `sections` command. It lists the memory sections a scan will use, and only reads.
 
-The `scan` command is tested against a fake server and has run on a real console. That first test found a problem with section selection. It's fixed now, and testing continues. The command has:
+The `scan` command passed its first real-console test on Assassin's Creed III (PS4, GoldHEN, ps4debug-NG 1.3.4). It found an exact 4-byte value, the in-game money. A next scan narrowed the results to one address, and a write changed it. The new value showed in the game. The command has:
 
 - A first scan and next scans for 4-byte values.
 - Writing a value with `w`. This is the only command that writes to PS4 memory.
 
 Only exact 4-byte (32-bit) values work for now. Other value types and compare types come later.
 
-Next: keep testing `scan` on a real console.
+Next: Phase 1, a local web API for settings, connection, payload injection, more value types and the cheat list.
 
 ## Planned features
 
@@ -107,7 +107,7 @@ Phase 0 needs the payload loaded by hand. From Phase 1 the app will do this itse
 
    If `ps4ip.local` holds your address, you can leave out `--ip`.
 
-   The command lists every process and asks which one to scan. The suggested game is marked `→ suggested:`, with the reason beside its name. Press Return to take the suggestion, or type a pid or a name instead. Not every game runs as `eboot.bin`. Assassin's Creed III, for example, runs as `ac3_engine_orbis_fn.elf`.
+   The command shows only the suggested game, marked `→ suggested:`, with the reason beside its name. Press Return to take the suggestion. To see every process, type `list`. You can also type a pid or a name. Not every game runs as `eboot.bin`. Assassin's Creed III, for example, runs as `ac3_engine_orbis_fn.elf`.
 
    Then it prints the process's title ID and lists the readable memory sections with their name, start, end, size and protection. Unnamed sections show as `(unnamed)`. A ✓ marks the sections a scan will use. The last line gives the number of selected sections out of the total, and their size in bytes.
 
@@ -150,7 +150,7 @@ Phase 0 needs the payload loaded by hand. From Phase 1 the app will do this itse
 
    Every scan prints and logs the hit count for each section. Every write is logged with the old and new bytes (with `--debug`).
 
-   Speed depends on the method and the network. A first scan of about 3 GB with `local` can take 10 to 15 minutes on Wi-Fi, at about 4 MB/s. With `console`, only the matches cross the network. A wired connection is faster.
+   Speed depends on the method and the network. On Assassin's Creed III, a first scan of about 3.4 GB took about 90 seconds with `console`. The PS4 does the comparison, so only the matches cross the network. The same scan with `local` took about 14 minutes over Wi-Fi, at about 4 MB/s. Both found the same 36 results. A wired connection is faster.
 
 To write a debug log without the flag, set `PS4MEM_DEBUG=1`. Logs go to `logs/`, which is git-ignored. Attach the log when you report a problem.
 
