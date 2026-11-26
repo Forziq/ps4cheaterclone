@@ -43,9 +43,10 @@ public sealed class DebugLog : IDisposable
     {
         if (!IsRequested(settings)) return Disabled;
 
-        Directory.CreateDirectory(settings.LogDirectory);
+        var directory = ProjectPaths.ResolveDirectory(settings.LogDirectory);
+        Directory.CreateDirectory(directory);
         var fileName = $"ps4mem-{DateTime.Now:yyyyMMdd-HHmmss}.log";
-        var path = Path.GetFullPath(Path.Combine(settings.LogDirectory, fileName));
+        var path = Path.Combine(directory, fileName);
         var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read);
         var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
 

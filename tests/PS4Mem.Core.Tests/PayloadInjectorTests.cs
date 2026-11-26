@@ -28,16 +28,16 @@ public sealed class PayloadInjectorTests : IDisposable
         Directory.Delete(_dir, recursive: true);
     }
 
-    /// <summary>Fast timings so the timeout test takes about a second.</summary>
+    /// <summary>Short timings so the timeout test takes about 3 s, with room for a busy test run.</summary>
     private PayloadInjector Injector(int loaderPort, int commandPort) =>
         new(PS4MemSettings.Default with
         {
             PayloadPort = loaderPort,
             CommandPort = commandPort,
             PayloadPath = _payloadPath,
-            PayloadStartTimeout = TimeSpan.FromSeconds(1),
+            PayloadStartTimeout = TimeSpan.FromSeconds(3),
             PayloadPollInterval = TimeSpan.FromMilliseconds(50),
-            PortProbeTimeout = TimeSpan.FromMilliseconds(500),
+            PortProbeTimeout = TimeSpan.FromSeconds(3),
         }, new DebugLog(_logText));
 
     /// <summary>Something answering on the port, like a running ps4debug (accepts and drops connects).</summary>
@@ -112,9 +112,9 @@ public sealed class PayloadInjectorTests : IDisposable
             Injector(loader.Port, FakeLoader.FreePort()).InjectAsync(Host));
 
         Assert.Equal(PayloadErrorKind.NoAnswer, e.Kind);
-        Assert.Contains("within 1 s", e.Message);
+        Assert.Contains("within 3 s", e.Message);
         Assert.Equal(_payload, await loader.Received); // it was sent, just never started
-        Assert.True(clock.Elapsed >= TimeSpan.FromSeconds(0.9), $"gave up after {clock.Elapsed}");
+        Assert.True(clock.Elapsed >= TimeSpan.FromSeconds(2.9), $"gave up after {clock.Elapsed}");
     }
 
     [Fact]

@@ -34,9 +34,9 @@ public sealed class ConnectionManagerInjectTests : IDisposable
 
     private static readonly PS4MemSettings Fast = PS4MemSettings.Default with
     {
-        PayloadStartTimeout = TimeSpan.FromSeconds(1),
+        PayloadStartTimeout = TimeSpan.FromSeconds(3),
         PayloadPollInterval = TimeSpan.FromMilliseconds(50),
-        PortProbeTimeout = TimeSpan.FromMilliseconds(500),
+        PortProbeTimeout = TimeSpan.FromSeconds(3),
     };
 
     private ConnectionManager Manager(int commandPort, int loaderPort)

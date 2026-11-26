@@ -21,7 +21,7 @@ public sealed record PS4MemSettings
     /// <summary>GoldHEN BinLoader port (one payload per session).</summary>
     public int PayloadPort { get; init; } = 9090;
 
-    /// <summary>Debugger payload sent to the BinLoader.</summary>
+    /// <summary>Debugger payload sent to the BinLoader (a relative path is found as <see cref="ProjectPaths.ResolveFile"/> says).</summary>
     public string PayloadPath { get; init; } = "payloads/ps4debug-ng_v1.3.4_release_2026-11-05.bin";
 
     /// <summary>Loader ports the app offers: GoldHEN BinLoader first, then other loaders' usual ports.</summary>
@@ -151,7 +151,7 @@ public sealed record PS4MemSettings
     /// </summary>
     public bool DebugLogging { get; init; }
 
-    /// <summary>Folder for debug logs (relative paths are relative to the working directory).</summary>
+    /// <summary>Folder for debug logs (a relative path goes in the project folder; see <see cref="ProjectPaths"/>).</summary>
     public string LogDirectory { get; init; } = "logs";
 
     /// <summary>How many bytes of each protocol message the debug log hex-dumps.</summary>

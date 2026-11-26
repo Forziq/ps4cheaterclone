@@ -70,7 +70,7 @@ public sealed class PayloadInjector(PS4MemSettings settings, DebugLog log)
         var port = loaderPort ?? settings.PayloadPort;
         if (port is < 1 or > 65535)
             throw new ArgumentException($"Loader port {port} must be 1-65535.");
-        var path = Path.GetFullPath(payloadPath ?? settings.PayloadPath);
+        var path = ProjectPaths.ResolveFile(payloadPath ?? settings.PayloadPath);
         var commandPort = settings.CommandPort;
 
         log.Info(Cat, $"Inject {path} to {host}:{port}, then wait for ps4debug on {host}:{commandPort}");
