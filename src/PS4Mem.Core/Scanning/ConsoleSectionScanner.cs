@@ -81,14 +81,23 @@ public sealed class ConsoleSectionScanner : ISectionScanner
         client.Connect();
     }
 
-    public void ScanSection(int pid, Section section, uint value, int alignment, ScanHitBuffer hits,
+    /// <summary>
+    /// Exact 4-byte integers only for now (the Phase 0 scan); <see cref="ScanEngine"/> runs other
+    /// queries locally. Mapping the other types and compares to the console comes in T1.4.
+    /// </summary>
+    public bool Supports(ScanQuery query) =>
+        query.Compare == ScanCompare.Exact && query.Type is ScanValueType.UInt32 or ScanValueType.Int32;
+
+    public void ScanSection(int pid, Section section, ScanQuery query, int alignment, ScanHitBuffer hits,
         Action<long> bytesDone, CancellationToken cancel)
     {
+        if (!Supports(query))
+            throw new NotSupportedException($"Console scan can't run '{query}'; use local scan.");
         if (alignment is < 1 or > 255)
             throw new ArgumentOutOfRangeException(nameof(alignment), "Console scan alignment is a u8 (1-255).");
         var command = Turbo ? Ps4Command.TurboStart : Ps4Command.ProcScanStart;
-        var needle = new byte[ValueSize];
-        BinaryPrimitives.WriteUInt32LittleEndian(needle, value);
+        var needle = query.Value!.Bytes;
+        var value = BinaryPrimitives.ReadUInt32LittleEndian(needle);
         var first = hits.Count;
 
         for (var pos = section.Start; pos < section.End;)
@@ -106,7 +115,7 @@ public sealed class ConsoleSectionScanner : ISectionScanner
                     var found = BinaryPrimitives.ReadUInt32LittleEndian(bytes);
                     if (found != value) // exact compare on the console; this would be a server bug
                         _log.Warn(Cat, $"console returned 0x{piece + offset:X} = {found}, not {value}; kept");
-                    hits.Add(piece + offset, found);
+                    hits.Add(piece + offset, bytes[..ValueSize]);
                 });
 
             pos += own;

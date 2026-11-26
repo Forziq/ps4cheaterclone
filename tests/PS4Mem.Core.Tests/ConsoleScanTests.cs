@@ -154,10 +154,10 @@ public class ConsoleScanTests
             c.SendStatus(Ps4Status.Success);
         });
         using var client = ConnectTo(server);
-        var hits = new ScanHitBuffer();
+        var hits = new ScanHitBuffer(4);
 
         new ConsoleSectionScanner(client, turbo: false)
-            .ScanSection(Pid, Sec("anon:a", 0x5000, 0x100), Money, 1, hits, _ => { }, default);
+            .ScanSection(Pid, Sec("anon:a", 0x5000, 0x100), ScanQuery.ExactUInt32(Money), 1, hits, _ => { }, default);
         server.WaitForScript();
 
         Assert.Equal(1, start!.Body[18]);
@@ -177,7 +177,7 @@ public class ConsoleScanTests
         using var client = ConnectTo(server);
 
         var e = Assert.Throws<Ps4StatusException>(() => new ConsoleSectionScanner(client, turbo: true)
-            .ScanSection(Pid, Sec("anon:a", 0x5000, 0x100), Money, 4, new ScanHitBuffer(), _ => { }, default));
+            .ScanSection(Pid, Sec("anon:a", 0x5000, 0x100), ScanQuery.ExactUInt32(Money), 4, new ScanHitBuffer(4), _ => { }, default));
 
         Assert.Equal(Ps4Status.DataNull, e.Status);
         Assert.False(client.IsConnected);
@@ -197,7 +197,7 @@ public class ConsoleScanTests
         using var client = ConnectTo(server);
 
         Assert.Throws<Ps4ProtocolException>(() => new ConsoleSectionScanner(client, turbo: true)
-            .ScanSection(Pid, Sec("anon:a", 0x5000, 0x100), Money, 4, new ScanHitBuffer(), _ => { }, default));
+            .ScanSection(Pid, Sec("anon:a", 0x5000, 0x100), ScanQuery.ExactUInt32(Money), 4, new ScanHitBuffer(4), _ => { }, default));
         Assert.False(client.IsConnected);
     }
 
@@ -224,10 +224,10 @@ public class ConsoleScanTests
             }
         });
         using var client = ConnectTo(server);
-        var hits = new ScanHitBuffer();
+        var hits = new ScanHitBuffer(4);
 
         new ConsoleSectionScanner(client, turbo: true)
-            .ScanSection(Pid, Sec("anon:big", start, 0x4000_0100), Money, 1, hits, _ => { }, default);
+            .ScanSection(Pid, Sec("anon:big", start, 0x4000_0100), ScanQuery.ExactUInt32(Money), 1, hits, _ => { }, default);
         server.WaitForScript();
 
         Assert.Equal(start, requests[0].U64(4));

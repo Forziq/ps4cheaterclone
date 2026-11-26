@@ -223,7 +223,7 @@ internal static class ScanCommand
         {
             client.ReadMemory(pid, results.Addresses[i], now);
             var current = BinaryPrimitives.ReadUInt32LittleEndian(now);
-            Console.WriteLine($"  {i,4}  {results.Addresses[i],12:X}  {results.Values[i],12}  {current,12}  {results.SectionOf(i).DisplayName}");
+            Console.WriteLine($"  {i,4}  {results.Addresses[i],12:X}  {results.FormatValue(i),12}  {current,12}  {results.SectionOf(i).DisplayName}");
         }
         if (results.Count > count)
             Console.WriteLine($"  ... and {results.Count - count:N0} more.");

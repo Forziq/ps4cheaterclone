@@ -35,7 +35,7 @@ public class ScanEngineTests
         var results = new ScanEngine(mem, Small).FirstScan(Pid, [a], Money);
 
         Assert.Equal([0x1000UL, 0x1010, 0x11FC], results.Addresses);
-        Assert.All(results.Values, v => Assert.Equal(Money, v));
+        Assert.All(results.U32s(), v => Assert.Equal(Money, v));
         Assert.Equal(1, results.ScanNumber);
         Assert.Equal("local", results.Method);
         Assert.Empty(mem.Writes);
@@ -111,7 +111,7 @@ public class ScanEngineTests
         var next = engine.NextScan(first, 999);
 
         Assert.Equal([0x1010UL, 0x8004], next.Addresses);
-        Assert.Equal([999u, 999u], next.Values);
+        Assert.Equal([999u, 999u], next.U32s());
         Assert.Equal(2, next.ScanNumber);
         Assert.Equal([1, 1], next.Sections.Select(s => s.Hits));
         Assert.Equal("anon:b", next.SectionOf(1).Name);

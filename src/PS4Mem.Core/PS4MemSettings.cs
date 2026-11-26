@@ -60,8 +60,17 @@ public sealed record PS4MemSettings
     /// </summary>
     public int ScanChunkBytes { get; init; } = 4 * 1024 * 1024;
 
-    /// <summary>Scan step in bytes: 4 = 4-byte alignment (the default, like PS4Cheater), 1 = every byte.</summary>
+    /// <summary>
+    /// Scan step in bytes: 4 = 4-byte alignment (the default, like PS4Cheater), 1 = every byte.
+    /// Each type caps it at its own step (u8 and strings 1, u16 2), like PS4Cheater.
+    /// </summary>
     public int ScanAlignment { get; init; } = 4;
+
+    /// <summary>
+    /// Unknown initial value keeps only non-zero values, like PS4Cheater. Most of memory is zero,
+    /// so this cuts the results a lot; turn it off for a value that starts at 0.
+    /// </summary>
+    public bool UnknownInitialSkipZeros { get; init; } = true;
 
     /// <summary>
     /// Next scan: previous hits closer than this are read together in one CMD_PROC_READ
