@@ -24,6 +24,24 @@ public sealed record PS4MemSettings
     /// <summary>Debugger payload sent to the BinLoader.</summary>
     public string PayloadPath { get; init; } = "payloads/ps4debug-ng_v1.3.4_release_2026-11-05.bin";
 
+    /// <summary>Loader ports the app offers: GoldHEN BinLoader first, then other loaders' usual ports.</summary>
+    public IReadOnlyList<int> LoaderPortOptions { get; init; } = [9090, 9020, 9021];
+
+    /// <summary>
+    /// After sending the payload, how long to keep trying the command port before giving up.
+    /// ps4debug takes a few seconds to start (about 10 s on a real console).
+    /// </summary>
+    public TimeSpan PayloadStartTimeout { get; init; } = TimeSpan.FromSeconds(20);
+
+    /// <summary>How often to try the command port while waiting for the payload to start.</summary>
+    public TimeSpan PayloadPollInterval { get; init; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Connect timeout for one quick "does this port answer?" check (before injecting, and each
+    /// poll while waiting). On a LAN a port answers or refuses well within this.
+    /// </summary>
+    public TimeSpan PortProbeTimeout { get; init; } = TimeSpan.FromSeconds(1);
+
     /// <summary>
     /// How long to wait for the TCP connect. This is the only timeout: reads have none,
     /// because scans can run for minutes (PROMPT §3.5, protocol.md §2).

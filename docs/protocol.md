@@ -472,3 +472,36 @@ PS4CheaterNeo's libdebug copy names `0xBDAACC02` `SCAN_NEXT` and `0xBDAACC06` `S
 4. `PAGE_SIZE` for the debugger build: 0x4000 in `ps4debug-NG/kdebugger/include/proc.h:10`; no define
    found under `NG/include`. Only matters for the legacy scan.
 5. `CMD_PROC_INFO` with a bad pid returns `CMD_SUCCESS` and garbage: treat an empty title ID as "unknown".
+6. GoldHEN's BinLoader on 9090 (§17): no source shows its wire format. Raw bytes then close, as the
+   clients send to 9020/9021, is assumed and must be confirmed on the console.
+
+## 17. Sending the payload (BinLoader)
+
+Not part of ps4debug: the payload loader is a separate server on the console. ps4debug-NG and
+libdebug have no sender. Every client sends the `.bin` the same way: open a TCP connection, write
+the whole file, close. There's no header, no length prefix and no reply.
+
+`PS4Cheater/PS4_Cheater/main.cs:983-990` (PS4CheaterNeo `SendPayload.cs:129-136` is the same):
+```csharp
+Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+socket.Connect(new IPEndPoint(IPAddress.Parse(IP), port));
+socket.SendFile(payloadPath);
+socket.Close();
+```
+After the send the clients wait 1 s (`main.cs:1013` `Thread.Sleep(1000);`, Neo
+`SendPayload.cs:116`) and do not poll 744.
+
+Ports: GoldHEN's BinLoader is 9090 (`PS4CheaterNeo/README.md:82`: "Port is `9090` when using
+`GoldHEN2.x`"). Other loaders use 9020 or 9021 (PS4Cheater default `main.Designer.cs:671` "9020",
+Neo default `SendPayload.Designer.cs:74` "9021"). Once loaded, the payload listens on 744
+(`NG/include/server.h:15` `#define SERVER_PORT 744`; `ps4debug-NG/README.md:373-376`).
+
+What PS4 Mem does (`PayloadInjector`):
+- Before sending, it tries a TCP connect to 744. If 744 answers, ps4debug is already running, so it
+  refuses to inject: a second copy can freeze the console.
+- Connect to the loader port (5 s connect timeout), write every byte, half-close (`Shutdown(Send)`),
+  close. Connection refused means BinLoader is off or has already taken a payload this session
+  (it takes one per session).
+- It then tries a TCP connect to 744 right away and every 1 s, for up to 20 s. Each try has a 1 s
+  connect timeout. On a real console ps4debug took about 10 s to start answering.
+- When 744 answers, the app connects as usual (§2).
