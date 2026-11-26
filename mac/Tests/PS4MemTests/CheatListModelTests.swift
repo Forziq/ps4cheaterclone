@@ -232,4 +232,59 @@ final class CheatListModelTests: XCTestCase {
         XCTAssertEqual(calls.count, before + 1)
         XCTAssertEqual(calls.last, "GET /api/cheats/CUSA11711")
     }
+
+    // MARK: Import and export
+
+    func testExportReturnsTheFileAsTheBackendWritesIt() async {
+        let file = "{\"titleId\":\"CUSA11711\",\"cheats\":[]}"
+        serve { request in
+            request.url?.path == "/api/cheats/CUSA11711/export" ? .init(status: 200, body: file) : nil
+        }
+        let model = await shownModel()
+        let data = await model.exportFile()
+        XCTAssertEqual(data.map { String(decoding: $0, as: UTF8.self) }, file)
+        XCTAssertEqual(calls.last, "GET /api/cheats/CUSA11711/export")
+        model.exported(to: "/tmp/CUSA11711.json")
+        XCTAssertEqual(model.notice, "Exported 2 cheats to /tmp/CUSA11711.json")
+    }
+
+    private func importReply(mode: String) -> StubURLProtocol.Reply {
+        .init(status: 200, body: """
+        {"mode":"\(mode)","added":1,"replaced":1,"removed":\(mode == "replace" ? 1 : 0),
+         "table":\(cheatTableJSON(cheats: [cheatJSON(id: "c1", value: "7"), cheatJSON(id: "c3", address: "0x2001A3F30")]))}
+        """)
+    }
+
+    func testImportSendsTheFileAsItIsWithTheMode() async {
+        serve { request in
+            request.url?.path == "/api/cheats/CUSA11711/import"
+                ? self.importReply(mode: URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first?.value ?? "") : nil
+        }
+        let model = await shownModel()
+        let file = "{\"titleId\":\"CUSA11711\",\"cheats\":[1]}"
+        await model.importFile(Data(file.utf8), mode: .merge)
+
+        let request = StubURLProtocol.requests.last!
+        XCTAssertEqual(request.url?.query, "mode=merge")
+        XCTAssertEqual(StubURLProtocol.bodies.last, file, "the file goes as it is")
+        XCTAssertEqual(model.cheats.map(\.id), ["c1", "c3"])
+        XCTAssertEqual(model.notice, "Imported: 1 added, 1 replaced")
+
+        await model.importFile(Data(file.utf8), mode: .replace)
+        XCTAssertEqual(StubURLProtocol.requests.last?.url?.query, "mode=replace")
+        XCTAssertEqual(model.notice, "Imported: 1 added, 1 replaced, 1 removed")
+        XCTAssertFalse(calls.contains { $0.hasSuffix("/write") || $0.hasSuffix("/lock") }, "import writes no memory")
+    }
+
+    func testABadFileChangesNothing() async {
+        serve { request in
+            request.url?.path.hasSuffix("/import") == true
+                ? .init(status: 400, body: "{\"error\":\"Not a cheat file.\"}") : nil
+        }
+        let model = await shownModel()
+        await model.importFile(Data("nope".utf8), mode: .replace)
+        XCTAssertEqual(model.error, "Couldn't import: Not a cheat file.")
+        XCTAssertEqual(model.cheats.map(\.id), ["c1", "c2"])
+    }
 }

@@ -183,6 +183,49 @@ final class CheatListModel {
         }
     }
 
+    // MARK: Import and export (files on the Mac, no memory writes)
+
+    /// The saved list as a cheat file, to save where the user chooses. Nil (with `error`) if it fails.
+    func exportFile() async -> Data? {
+        guard let titleId else { return nil }
+        error = nil
+        notice = nil
+        do {
+            return try await client.exportCheats(titleId: titleId)
+        } catch {
+            self.error = "Couldn't export: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// Shows an error from the view (e.g. a file that couldn't be read or saved).
+    func showError(_ message: String) {
+        notice = nil
+        error = message
+    }
+
+    /// Called after the exported file was written.
+    func exported(to path: String) {
+        notice = "Exported \(cheats.count == 1 ? "1 cheat" : "\(cheats.count) cheats") to \(path)"
+    }
+
+    /// Imports a cheat file into this game's list. Merge adds its cheats (one with a saved cheat's id
+    /// replaces it); replace makes the file the whole list. A bad file changes nothing.
+    func importFile(_ data: Data, mode: CheatImportMode) async {
+        guard let titleId else { return }
+        error = nil
+        notice = nil
+        do {
+            let result = try await client.importCheats(titleId: titleId, file: data, mode: mode)
+            apply(result.table)
+            var parts = ["\(result.added) added", "\(result.replaced) replaced"]
+            if mode == .replace { parts.append("\(result.removed) removed") }
+            notice = "Imported: " + parts.joined(separator: ", ")
+        } catch {
+            self.error = "Couldn't import: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: Current values (reads only)
 
     /// Reads every cheat's value from the process. While a cheat is locked, the list is fetched too,

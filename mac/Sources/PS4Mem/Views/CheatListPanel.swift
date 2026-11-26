@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 /// The chosen game's cheat list, like PS4Cheater: lock, description, address, section + offset, type,
 /// value and the value in memory now, and delete.
@@ -6,12 +8,15 @@ import SwiftUI
 /// Editing: Return in the description field saves it. Return in the value field saves the value
 /// **and writes it to the PS4**; leaving the field (or Esc) without Return puts the old value back.
 /// The lock box writes the value now and every ~200 ms until it's unticked.
+/// The list is saved on the Mac after every change; Import and Export read and write cheat files.
 struct CheatListPanel: View {
     let cheats: CheatListModel
 
     @State private var selection: Set<String> = []
     /// The cheat waiting for "Delete?" to be confirmed.
     @State private var deleting: Cheat?
+    /// A chosen file waiting for "merge or replace?".
+    @State private var importing: PendingImport?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -22,6 +27,12 @@ struct CheatListPanel: View {
                 Button("Reload") { Task { await cheats.reload() } }
                     .disabled(cheats.titleId == nil || cheats.isLoading)
                     .help("Read the saved list again")
+                Button("Import…") { chooseImportFile() }
+                    .disabled(cheats.titleId == nil)
+                    .help("Add cheats from a cheat file (.json) to this game's list")
+                Button("Export…") { Task { await export() } }
+                    .disabled(cheats.titleId == nil || cheats.cheats.isEmpty)
+                    .help("Save this game's list as a cheat file (.json)")
             }
 
             Table(cheats.cheats, selection: $selection) {
@@ -86,12 +97,58 @@ struct CheatListPanel: View {
         } message: { cheat in
             Text(cheat.locked ? "Its lock stops too." : "It goes from the saved list.")
         }
+        .confirmationDialog("Import \(importing?.name ?? "the file")?", isPresented: importingBinding,
+                            presenting: importing) { file in
+            Button("Add to the list") { Task { await cheats.importFile(file.data, mode: .merge) } }
+            Button("Replace the whole list", role: .destructive) {
+                Task { await cheats.importFile(file.data, mode: .replace) }
+            }
+        } message: { _ in
+            Text("Add keeps the saved cheats (a cheat with the same id is replaced). Replace removes "
+                 + "the cheats that aren't in the file. Nothing is written to the PS4.")
+        }
         // Another game: the old selection points at other rows.
         .onChange(of: cheats.titleId) { selection = [] }
     }
 
     private var deletingBinding: Binding<Bool> {
         Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })
+    }
+
+    private var importingBinding: Binding<Bool> {
+        Binding(get: { importing != nil }, set: { if !$0 { importing = nil } })
+    }
+
+    /// Asks for a cheat file, reads it, then asks merge or replace.
+    private func chooseImportFile() {
+        let panel = NSOpenPanel()
+        panel.title = "Import a cheat file into \(cheats.titleId ?? "this game")'s list"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.json]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            importing = PendingImport(name: url.lastPathComponent, data: try Data(contentsOf: url))
+        } catch {
+            cheats.showError("Couldn't read \(url.lastPathComponent): \(error.localizedDescription)")
+        }
+    }
+
+    /// Fetches the list as a cheat file and saves it where the user chooses (TITLEID.json by default).
+    private func export() async {
+        guard let titleId = cheats.titleId, let data = await cheats.exportFile() else { return }
+        let panel = NSSavePanel()
+        panel.title = "Export \(titleId)'s cheat list"
+        panel.nameFieldStringValue = "\(titleId).json"
+        panel.allowedContentTypes = [.json]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try data.write(to: url, options: .atomic)
+            cheats.exported(to: url.path)
+        } catch {
+            cheats.showError("Couldn't save \(url.lastPathComponent): \(error.localizedDescription)")
+        }
     }
 
     private func sectionText(_ cheat: Cheat) -> String {
@@ -128,6 +185,12 @@ struct CheatListPanel: View {
             Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
         }
     }
+}
+
+/// A cheat file the user chose to import, read into memory.
+private struct PendingImport {
+    let name: String
+    let data: Data
 }
 
 /// The value in memory now: orange when it differs from the cheat's value, a dash until read.
