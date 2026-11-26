@@ -51,6 +51,63 @@ GET {{host}}/api/processes/{{pid}}/maps?filter=anon,exe&includeReadOnly=true
 ### Select every section
 GET {{host}}/api/processes/{{pid}}/maps?all=true
 
+### First scan: an exact 4-byte value in the default sections. Runs in the background: 202 at once.
+# Other fields: "type" (u8 i8 u16 i16 u32 i32 u64 i64 f32 f64 string bytes), "compare" (exact,
+# bigger than, smaller than, between with "value2", unknown initial value), "hex": true,
+# "sections": ["0x200000000", ...] (start addresses; none = the default selection),
+# "aligned": false (every byte), "method": "console" (compare on the PS4 when it can).
+# 409 while another scan runs.
+POST {{host}}/api/scan/first
+Content-Type: application/json
+
+{
+  "pid": {{pid}},
+  "type": "u32",
+  "compare": "exact",
+  "value": "1500"
+}
+
+### Scan progress: server-sent events. "progress" events while the scan runs (percent, section,
+# hits so far), then one "done" event with the result count and hits per section.
+GET {{host}}/api/scan/progress
+
+### Scan status once, as JSON
+GET {{host}}/api/scan/status
+
+### Results: the first 5,000 (?offset=&limit= for more, ?hex=true for hex values). "value" is what
+# the scan found; "total" is every result.
+GET {{host}}/api/scan/results
+
+### Current values of the visible rows, read from the PS4 now
+POST {{host}}/api/scan/results/values
+Content-Type: application/json
+
+{
+  "offset": 0,
+  "limit": 100
+}
+
+### Next scan on the results. Compares: exact, bigger than, smaller than, between, increased,
+# increased by, decreased, decreased by, changed, unchanged. The type stays the first scan's.
+POST {{host}}/api/scan/next
+Content-Type: application/json
+
+{
+  "compare": "unchanged"
+}
+
+### Progress of the next scan
+GET {{host}}/api/scan/progress
+
+### Undo the last scan (back to the first scan's results)
+POST {{host}}/api/scan/undo
+
+### Cancel a running scan (fine when none runs; the previous results stay)
+POST {{host}}/api/scan/cancel
+
+### New scan: drops every result
+POST {{host}}/api/scan/new
+
 ### Disconnect (always 200)
 POST {{host}}/api/disconnect
 

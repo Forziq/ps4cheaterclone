@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -19,6 +20,14 @@ public sealed partial class ApiHttpFileTests
     [Fact]
     public async Task Every_call_in_api_http_works_against_the_fake_console()
     {
+        // The game's heap: the scans find 1500 twice.
+        const ulong Heap = 0x2_0000_0000;
+        var memory = new byte[0x10_0000];
+        BinaryPrimitives.WriteUInt32LittleEndian(memory.AsSpan(0x100), 1500);
+        BinaryPrimitives.WriteUInt32LittleEndian(memory.AsSpan(0x200), 1500);
+        var mapsCalls = 0;
+        var reads = new List<(ulong Address, int Length)>();
+
         // The file injects first: the fake loader takes the payload and then "starts" ps4debug.
         var commandPort = FakeLoader.FreePort();
         FakePs4Server? server = null;
@@ -37,16 +46,28 @@ public sealed partial class ApiHttpFileTests
             c.SendStatus(Ps4Status.Success);
             c.Send(ProcInfo(85, "ac3_engine_orbis_fn.elf", "/app0/ac3.elf", "CUSA11711", ""));
 
-            for (var i = 0; i < 3; i++)
+            // Then the maps and scan calls, in whatever order the file makes them, until disconnect.
+            while (true)
             {
-                Assert.Equal(85, c.Expect(Ps4Command.ProcMaps, 4).I32(0));
+                var r = c.ReadRequest();
+                if (r.Command == Ps4Command.ConsoleEnd) break;
+                Assert.Equal(85, r.I32(0));
                 c.SendStatus(Ps4Status.Success);
-                c.Send(U32(2),
-                    MapEntry("", 0x2_0000_0000, 0x2_0010_0000, 0, Ps4Protocol.ProtRead | Ps4Protocol.ProtWrite),
-                    MapEntry("executable", 0x40_0000, 0x50_0000, 0, Ps4Protocol.ProtRead | Ps4Protocol.ProtExec));
+                if (r.Command == Ps4Command.ProcMaps)
+                {
+                    mapsCalls++;
+                    c.Send(U32(2),
+                        MapEntry("", Heap, Heap + 0x10_0000, 0, Ps4Protocol.ProtRead | Ps4Protocol.ProtWrite),
+                        MapEntry("executable", 0x40_0000, 0x50_0000, 0, Ps4Protocol.ProtRead | Ps4Protocol.ProtExec));
+                }
+                else
+                {
+                    Assert.Equal(Ps4Command.ProcRead, r.Command);
+                    var (address, length) = (r.U64(4), (int)r.U32(12));
+                    reads.Add((address, length));
+                    c.Send(memory.AsSpan((int)(address - Heap), length).ToArray());
+                }
             }
-
-            c.Expect(Ps4Command.ConsoleEnd, 0);
         },
             c => // the connect near the end
             {
@@ -77,6 +98,9 @@ public sealed partial class ApiHttpFileTests
             var response = await http.SendAsync(message);
             var text = await response.Content.ReadAsStringAsync();
             Assert.True(response.IsSuccessStatusCode, $"'{r.Title}' ({r.Method} {r.Url}) got {(int)response.StatusCode}: {text}");
+            // Server-sent events (scan progress): keep the last event's data.
+            if (response.Content.Headers.ContentType?.MediaType == "text/event-stream")
+                text = text.Split('\n').Last(l => l.StartsWith("data: "))["data: ".Length..];
             replies[r.Title] = JsonDocument.Parse(text).RootElement.Clone();
         }
         Assert.NotNull(server);
@@ -110,6 +134,21 @@ public sealed partial class ApiHttpFileTests
         Assert.Equal(["anon", "exe"], Reply("Your own name filter").GetProperty("nameFilter").EnumerateArray().Select(e => e.GetString()));
         Assert.Equal(2, Reply("Your own name filter").GetProperty("selectedCount").GetInt32());
         Assert.Equal(2, Reply("Select every section").GetProperty("selectedCount").GetInt32());
+
+        // Maps: three section calls and the first scan's. Reads: the first scan, the value refresh, the next scan.
+        Assert.Equal(4, mapsCalls);
+        Assert.Equal([(Heap, 0x10_0000), (Heap + 0x100, 0x104), (Heap + 0x100, 0x104)], reads);
+        Assert.Equal("first", Reply("First scan").GetProperty("kind").GetString());
+        var progress = Reply("Scan progress");
+        Assert.Equal("done", progress.GetProperty("state").GetString());
+        Assert.Equal(2, progress.GetProperty("resultCount").GetInt64());
+        Assert.Equal(2, progress.GetProperty("sections")[0].GetProperty("hits").GetInt64());
+        Assert.Equal(2, Reply("Results: the first").GetProperty("total").GetInt64());
+        Assert.Equal("0x200000100", Reply("Results: the first").GetProperty("results")[0].GetProperty("address").GetString());
+        Assert.Equal("1500", Reply("Current values").GetProperty("values")[1].GetProperty("value").GetString());
+        Assert.Equal(2, Reply("Progress of the next scan").GetProperty("scanNumber").GetInt32());
+        Assert.Equal(1, Reply("Undo the last scan").GetProperty("scanNumber").GetInt32());
+        Assert.Equal(0, Reply("New scan").GetProperty("resultCount").GetInt64());
 
         Assert.False(Reply("Disconnect").GetProperty("connected").GetBoolean());
     }

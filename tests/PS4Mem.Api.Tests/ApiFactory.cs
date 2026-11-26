@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using PS4Mem.Core;
 using PS4Mem.Core.Connection;
 
 namespace PS4Mem.Api.Tests;
@@ -10,7 +11,8 @@ namespace PS4Mem.Api.Tests;
 /// <summary>
 /// The real API in memory, with its settings file in a temp folder so tests never touch
 /// ~/Library/Application Support/PS4Mem. The console IP only comes from requests and the
-/// saved settings (never PS4_IP or the repo's ps4ip.local).
+/// saved settings (never PS4_IP or the repo's ps4ip.local). Spilled scan data goes to the temp
+/// folder too, and scan progress events come every 20 ms.
 /// </summary>
 public class ApiFactory : WebApplicationFactory<Program>
 {
@@ -28,7 +30,14 @@ public class ApiFactory : WebApplicationFactory<Program>
     {
         builder.UseSetting("PS4Mem:SettingsPath", SettingsPath);
         builder.ConfigureTestServices(services =>
-            services.Replace(ServiceDescriptor.Singleton(IpSources.None)));
+        {
+            services.Replace(ServiceDescriptor.Singleton(IpSources.None));
+            services.Replace(ServiceDescriptor.Singleton(PS4MemSettings.Default with
+            {
+                ScanDataDirectory = Path.Combine(TempDir, "scans"),
+                ScanProgressInterval = TimeSpan.FromMilliseconds(20),
+            }));
+        });
     }
 
     protected override void Dispose(bool disposing)

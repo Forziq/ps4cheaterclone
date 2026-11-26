@@ -1,6 +1,7 @@
 using PS4Mem.Core.Logging;
 using PS4Mem.Core.Payload;
 using PS4Mem.Core.Protocol;
+using PS4Mem.Core.Scanning;
 using PS4Mem.Core.Sections;
 using PS4Mem.Core.Settings;
 
@@ -46,7 +47,8 @@ public sealed record SectionOptions(IReadOnlyList<string>? NameFilter = null, bo
 /// The one ps4debug connection of the app (a singleton in the API). Connect and disconnect are
 /// serialised; commands run on <see cref="PS4DebugClient"/>, which has its own socket lock.
 /// The process picker and section filter only suggest: the caller always passes the pid the user chose.
-/// Disconnect releases everything this manager holds (later also locks and scans).
+/// Disconnect releases everything this manager holds and raises <see cref="Releasing"/> first,
+/// so scans (and later locks) stop before the socket closes.
 /// </summary>
 public sealed class ConnectionManager : IDisposable
 {
@@ -62,6 +64,7 @@ public sealed class ConnectionManager : IDisposable
     private PS4MemSettings? _sessionSettings;
     private ConnectionStatus? _connected;
     private string? _lastError;
+    private (ISectionScanner? Scanner, string Reason)? _consoleScanner; // per connection, made on first use
     private int _injecting; // 1 while an injection runs (it waits up to 20 s, outside the lock)
 
     public ConnectionManager(AppSettingsStore store, IpSources ipSources, DebugLogSwitch logs, PS4MemSettings? defaults = null)
@@ -73,6 +76,13 @@ public sealed class ConnectionManager : IDisposable
     }
 
     private DebugLog Log => _logs.Current;
+
+    /// <summary>
+    /// Raised on disconnect and when the connection is lost, before the client closes (so a
+    /// handler can still send a last command). Runs with the connection lock held: handlers
+    /// must not call back into this manager.
+    /// </summary>
+    public event Action? Releasing;
 
     /// <summary>Settings for the next connection: saved app settings on top of the defaults.</summary>
     private PS4MemSettings CurrentSettings => _store.Current.ApplyTo(_defaults);
@@ -259,6 +269,34 @@ public sealed class ConnectionManager : IDisposable
         return options.SelectAll ? SectionFilter.SelectAll(selection) : selection;
     }
 
+    /// <summary>
+    /// What a scan needs from this connection. The console scanner is created (it authenticates
+    /// with ps4debug-NG and checks for Turbo Scan) on first use and kept for the connection.
+    /// </summary>
+    public ScanTarget GetScanTarget()
+    {
+        var (client, settings) = Session();
+        return new ScanTarget(client, settings, Log, () => ConsoleScanner(client));
+    }
+
+    private (ISectionScanner? Scanner, string Reason) ConsoleScanner(PS4DebugClient client)
+    {
+        lock (_gate)
+        {
+            DropIfLost();
+            if (!ReferenceEquals(client, _client) || _sessionSettings is null)
+                throw ConnectionStateException.NotConnected();
+            // TryCreate may reconnect the client (the server closes on an unknown command),
+            // so it runs under the lock where DropIfLost can't see the gap.
+            if (_consoleScanner is null)
+            {
+                var (scanner, reason) = ConsoleSectionScanner.TryCreate(client, _sessionSettings, Log);
+                _consoleScanner = (scanner, reason);
+            }
+            return _consoleScanner.Value;
+        }
+    }
+
     public void Dispose() => Disconnect();
 
     // ---- Plumbing --------------------------------------------------------------------------
@@ -298,6 +336,15 @@ public sealed class ConnectionManager : IDisposable
 
     private void Release()
     {
+        try
+        {
+            Releasing?.Invoke();
+        }
+        catch (Exception e)
+        {
+            Log.Error(Cat, "Releasing the connection's scans failed", e);
+        }
+        _consoleScanner = null;
         _client?.Dispose(); // sends CMD_CONSOLE_END when the socket is still open
         _client = null;
         _sessionSettings = null;

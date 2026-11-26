@@ -95,6 +95,15 @@ public sealed record PS4MemSettings
     /// <summary>How many scans "undo" can go back. Each kept scan may hold disk space.</summary>
     public int ScanUndoLevels { get; init; } = 1;
 
+    /// <summary>How often <c>GET /api/scan/progress</c> sends an update while a scan runs.</summary>
+    public TimeSpan ScanProgressInterval { get; init; } = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>Results per page when <c>GET /api/scan/results</c> has no limit (PROMPT §5: show the first ~5,000).</summary>
+    public int ScanResultsPageRows { get; init; } = 5_000;
+
+    /// <summary>The most results one page (or one value refresh) may ask for.</summary>
+    public int ScanResultsMaxPageRows { get; init; } = 100_000;
+
     /// <summary>
     /// Sections whose name contains any of these are selected by default
     /// (PS4Cheater's approach; see PROMPT.md §3.3).
