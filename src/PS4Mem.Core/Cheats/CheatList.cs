@@ -1,4 +1,5 @@
 using PS4Mem.Core.Logging;
+using PS4Mem.Core.Protocol;
 using PS4Mem.Core.Scanning;
 
 namespace PS4Mem.Core.Cheats;
@@ -20,17 +21,27 @@ public sealed record CheatInput(
     string? SectionStart = null,
     string? Game = null);
 
+/// <summary>What a cheat write did: the cheat (with its new value, if one was given) and the value it replaced.</summary>
+public sealed record CheatWrite(Cheat Cheat, string OldValue, CheatLockState? Lock);
+
+/// <summary>A cheat's current value in memory.</summary>
+public sealed record CheatValue(string Id, string Value);
+
 /// <summary>
-/// The cheat lists per game (title ID): list, add, edit, delete. Each change is saved at once.
-/// Changes are serialised, so two quick edits can't lose each other.
+/// The cheat lists per game (title ID): list, add, edit, delete, write and lock. Each change is
+/// saved at once. Changes are serialised, so two quick edits can't lose each other. Memory is only
+/// written by <see cref="Write"/> and <see cref="Lock"/>, which the API calls on a click.
+/// An edit or delete of a locked cheat updates or stops its lock.
 /// </summary>
-public sealed class CheatList(CheatStore store, DebugLogSwitch? logs = null)
+public sealed class CheatList(CheatStore store, CheatLocks? locks = null, DebugLogSwitch? logs = null)
 {
     private const string Cat = "cheats";
     private readonly Lock _gate = new();
     private readonly DebugLogSwitch _logs = logs ?? new DebugLogSwitch();
 
     public CheatStore Store => store;
+
+    public CheatLocks? Locks => locks;
 
     private DebugLog Log => _logs.Current;
 
@@ -98,6 +109,7 @@ public sealed class CheatList(CheatStore store, DebugLogSwitch? logs = null)
 
             store.Save(table with { Cheats = table.Cheats.Select(c => c.Id == id ? cheat : c).ToList() });
             Log.Info(Cat, $"{table.TitleId}: changed {Describe(old)} to {Describe(cheat)}");
+            locks?.Update(table.TitleId, cheat);
             return cheat;
         }
     }
@@ -109,11 +121,69 @@ public sealed class CheatList(CheatStore store, DebugLogSwitch? logs = null)
         {
             var table = store.Load(titleId);
             var cheat = table.Find(id) ?? throw new CheatNotFoundException(table.TitleId, id);
+            locks?.Unlock(table.TitleId, id);
             store.Save(table with { Cheats = table.Cheats.Where(c => c.Id != id).ToList() });
             Log.Info(Cat, $"{table.TitleId}: deleted {Describe(cheat)}");
             return cheat;
         }
     }
+
+    /// <summary>
+    /// Writes a cheat's value into process <paramref name="pid"/> (the user clicked Write or edited
+    /// the value inline). A <paramref name="value"/> is saved as the cheat's value first. A locked
+    /// cheat goes on writing the new value.
+    /// </summary>
+    /// <exception cref="CheatNotFoundException">No cheat with this id.</exception>
+    public CheatWrite Write(string titleId, string id, int pid, IProcessMemory memory, string? value = null, bool hex = false)
+    {
+        var cheat = value is null ? Find(titleId, id) : Update(titleId, id, new CheatInput(Value: value, Hex: hex));
+        var title = CheatStore.NormalizeTitleId(titleId);
+        var old = new MemoryEditor(memory, Log).Write(pid, cheat.Address, cheat.ValueBytes(), $"cheat {title} {cheat.Id}");
+        Log.Info(Cat, $"{title}: wrote {Describe(cheat)} in pid {pid}");
+        return new CheatWrite(cheat, Format(cheat.Type, old), locks?.Find(title, id));
+    }
+
+    /// <summary>Locks a cheat in process <paramref name="pid"/>: written now, then every lock interval until unlocked.</summary>
+    /// <exception cref="InvalidOperationException">This list has no lock loop.</exception>
+    public CheatLockState Lock(string titleId, string id, int pid, IProcessMemory memory)
+    {
+        var l = locks ?? throw new InvalidOperationException("Locks aren't available.");
+        var cheat = Find(titleId, id);
+        return l.Lock(CheatStore.NormalizeTitleId(titleId), cheat, pid, memory);
+    }
+
+    /// <summary>Stops a lock. False when the cheat wasn't locked (not an error).</summary>
+    /// <exception cref="CheatNotFoundException">No cheat with this id.</exception>
+    public bool Unlock(string titleId, string id)
+    {
+        var cheat = Find(titleId, id);
+        return locks?.Unlock(CheatStore.NormalizeTitleId(titleId), cheat.Id) ?? false;
+    }
+
+    /// <summary>The lock of a cheat (or a stopped lock's error), or null.</summary>
+    public CheatLockState? LockOf(string titleId, string id) => locks?.Find(CheatStore.NormalizeTitleId(titleId), id);
+
+    /// <summary>Reads every cheat's current value from process <paramref name="pid"/> (reads only).</summary>
+    public IReadOnlyList<CheatValue> ReadValues(string titleId, int pid, IProcessMemory memory, CancellationToken ct = default)
+    {
+        var table = Get(titleId);
+        var values = new List<CheatValue>(table.Cheats.Count);
+        foreach (var c in table.Cheats)
+        {
+            var bytes = new byte[c.ValueBytes().Length];
+            memory.ReadMemory(pid, c.Address, bytes, ct);
+            values.Add(new CheatValue(c.Id, Format(c.Type, bytes)));
+        }
+        return values;
+    }
+
+    private Cheat Find(string titleId, string id)
+    {
+        var table = Get(titleId);
+        return table.Find(id) ?? throw new CheatNotFoundException(table.TitleId, id);
+    }
+
+    private static string Format(ScanValueType type, byte[] bytes) => ValueFormatter.Format(type, bytes);
 
     private static ulong? ParseStart(string? text) => string.IsNullOrWhiteSpace(text) ? null : HexAddress.Parse(text);
 

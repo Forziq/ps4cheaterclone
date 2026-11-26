@@ -40,13 +40,19 @@ builder.Services.AddSingleton(sp => new ScanSession(sp.GetRequiredService<PS4Mem
 // Cheat lists per title ID in ~/Library/Application Support/PS4Mem/cheats (or CheatDirectory).
 builder.Services.AddSingleton(sp => new CheatStore(
     sp.GetRequiredService<PS4MemSettings>().CheatDirectory, sp.GetRequiredService<DebugLogSwitch>()));
-builder.Services.AddSingleton(sp => new CheatList(sp.GetRequiredService<CheatStore>(), sp.GetRequiredService<DebugLogSwitch>()));
+// Locked cheats: written again every CheatLockInterval (200 ms) until unlocked or disconnected.
+builder.Services.AddSingleton(sp => new CheatLocks(sp.GetRequiredService<PS4MemSettings>(), sp.GetRequiredService<DebugLogSwitch>()));
+builder.Services.AddSingleton(sp => new CheatList(sp.GetRequiredService<CheatStore>(),
+    sp.GetRequiredService<CheatLocks>(), sp.GetRequiredService<DebugLogSwitch>()));
 
 var app = builder.Build();
 
-// The connection releases the scans before it closes.
+// The connection releases the scans and stops every cheat lock before it closes.
 var scans = app.Services.GetRequiredService<ScanSession>();
-app.Services.GetRequiredService<ConnectionManager>().Releasing += scans.Release;
+var locks = app.Services.GetRequiredService<CheatLocks>();
+var connection = app.Services.GetRequiredService<ConnectionManager>();
+connection.Releasing += scans.Release;
+connection.Releasing += () => locks.StopAll("disconnected");
 
 // Start the debug log now if the saved settings (or PS4MEM_DEBUG=1) ask for one.
 var store = app.Services.GetRequiredService<AppSettingsStore>();

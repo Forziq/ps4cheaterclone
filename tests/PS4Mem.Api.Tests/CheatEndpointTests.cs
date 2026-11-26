@@ -1,11 +1,16 @@
+using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using PS4Mem.Core.Protocol;
+using PS4Mem.Core.Tests.Fakes;
+using static PS4Mem.Core.Tests.Fakes.FakeConsole;
 
 namespace PS4Mem.Api.Tests;
 
-/// <summary>/api/cheats: list, add, edit and delete per title ID (T1.6 m1).</summary>
+/// <summary>/api/cheats: list, add, edit and delete per title ID (T1.6 m1); write, lock and values (m2).</summary>
 public sealed class CheatEndpointTests : IDisposable
 {
     private const string Title = "CUSA11711";
@@ -101,6 +106,118 @@ public sealed class CheatEndpointTests : IDisposable
         var games = await _http.GetFromJsonAsync<JsonElement>("/api/cheats");
         var game = Assert.Single(games.GetProperty("games").EnumerateArray());
         Assert.Contains("can't be read", game.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task Memory_endpoints_need_a_pid_and_a_connection_but_unlock_does_not()
+    {
+        var id = await AddMoney();
+
+        var noPid = await _http.PostAsJsonAsync($"/api/cheats/{Title}/{id}/write", new { });
+        Assert.Equal(HttpStatusCode.BadRequest, noPid.StatusCode);
+        Assert.Contains("pid is required", await Error(noPid));
+
+        foreach (var url in new[] { $"/api/cheats/{Title}/{id}/write", $"/api/cheats/{Title}/{id}/lock", $"/api/cheats/{Title}/values" })
+        {
+            var response = await _http.PostAsJsonAsync(url, new { pid = Pid });
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains("Not connected", await Error(response));
+        }
+
+        var unlock = await _http.PostAsync($"/api/cheats/{Title}/{id}/unlock", null);
+        unlock.EnsureSuccessStatusCode();
+        Assert.False((await unlock.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("locked").GetBoolean());
+        Assert.Equal(HttpStatusCode.NotFound, (await _http.PostAsync($"/api/cheats/{Title}/nope/unlock", null)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Write_values_lock_and_disconnect_against_the_fake_console()
+    {
+        var memory = new byte[0x100];
+        BinaryPrimitives.WriteUInt32LittleEndian(memory, 500);
+        var writes = new ConcurrentQueue<(ulong Address, byte[] Data)>();
+        using var server = new FakePs4Server(c =>
+        {
+            c.Expect(Ps4Command.Version, 0);
+            c.Send(U32(3), "1.3"u8.ToArray());
+            ServeUntilEnd(c, memory, writes);
+        });
+        (await _http.PutAsJsonAsync("/api/settings", new { commandPort = server.Port })).EnsureSuccessStatusCode();
+        (await _http.PostAsJsonAsync("/api/connect", new { ip = "127.0.0.1" })).EnsureSuccessStatusCode();
+        var id = await AddMoney();
+
+        var values = await (await _http.PostAsJsonAsync($"/api/cheats/{Title}/values", new { pid = Pid }))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("500", Assert.Single(values.GetProperty("values").EnumerateArray()).GetProperty("value").GetString());
+        Assert.Empty(writes);
+
+        var write = await _http.PostAsJsonAsync($"/api/cheats/{Title}/{id}/write", new { pid = Pid, value = "750" });
+        write.EnsureSuccessStatusCode();
+        var written = await write.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("500", written.GetProperty("oldValue").GetString());
+        Assert.Equal("750", written.GetProperty("cheat").GetProperty("value").GetString());
+        Assert.Equal(750u, BinaryPrimitives.ReadUInt32LittleEndian(memory));
+        Assert.Single(writes);
+
+        var locked = await (await _http.PostAsJsonAsync($"/api/cheats/{Title}/{id}/lock", new { pid = Pid }))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(locked.GetProperty("locked").GetBoolean());
+        Assert.Equal(Pid, locked.GetProperty("lockPid").GetInt32());
+
+        BinaryPrimitives.WriteUInt32LittleEndian(memory, 1); // the game spends the money
+        Assert.True(SpinWait.SpinUntil(() => writes.Count >= 5, TimeSpan.FromSeconds(5)));
+        Assert.Equal(750u, BinaryPrimitives.ReadUInt32LittleEndian(memory));
+        var table = await _http.GetFromJsonAsync<JsonElement>($"/api/cheats/{Title}");
+        var row = Assert.Single(table.GetProperty("cheats").EnumerateArray());
+        Assert.True(row.GetProperty("locked").GetBoolean());
+        Assert.True(row.GetProperty("lockWrites").GetInt64() >= 4);
+
+        // Disconnect stops the lock before the socket closes: the server sees no write after CONSOLE_END.
+        (await _http.PostAsync("/api/disconnect", null)).EnsureSuccessStatusCode();
+        server.WaitForScript();
+        table = await _http.GetFromJsonAsync<JsonElement>($"/api/cheats/{Title}");
+        row = Assert.Single(table.GetProperty("cheats").EnumerateArray());
+        Assert.False(row.GetProperty("locked").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("lockPid").ValueKind);
+        Assert.All(writes, w => Assert.Equal(0x1000UL, w.Address));
+    }
+
+    /// <summary>Serves reads and writes of 0x1000.. from <paramref name="memory"/> until CONSOLE_END.</summary>
+    private static void ServeUntilEnd(FakeConsole c, byte[] memory, ConcurrentQueue<(ulong, byte[])> writes)
+    {
+        while (true)
+        {
+            var r = c.ReadRequest();
+            switch (r.Command)
+            {
+                case Ps4Command.ProcRead:
+                    Assert.Equal(Pid, r.I32(0));
+                    c.SendStatus(Ps4Status.Success);
+                    c.Send(memory.AsSpan((int)(r.U64(4) - 0x1000), (int)r.U32(12)).ToArray());
+                    break;
+                case Ps4Command.ProcWrite:
+                    Assert.Equal(Pid, r.I32(0));
+                    c.SendStatus(Ps4Status.Success);
+                    var data = c.ReadBytes((int)r.U32(12));
+                    data.CopyTo(memory.AsSpan((int)(r.U64(4) - 0x1000)));
+                    writes.Enqueue((r.U64(4), data));
+                    c.SendStatus(Ps4Status.Success);
+                    break;
+                case Ps4Command.ConsoleEnd:
+                    return;
+                default:
+                    throw new InvalidOperationException($"Unexpected {r.Command}");
+            }
+        }
+    }
+
+    private const int Pid = 85;
+
+    private async Task<string> AddMoney()
+    {
+        var add = await _http.PostAsJsonAsync($"/api/cheats/{Title}", new { description = "Money", address = "0x1000", type = "u32", value = "999" });
+        Assert.Equal(HttpStatusCode.Created, add.StatusCode);
+        return (await add.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
     }
 
     private static async Task<string> Error(HttpResponseMessage response) =>
