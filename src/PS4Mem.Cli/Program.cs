@@ -1,3 +1,4 @@
+using PS4Mem.Cli;
 using PS4Mem.Core;
 using PS4Mem.Core.Logging;
 using PS4Mem.Core.Protocol;
@@ -15,7 +16,10 @@ using PS4Mem.Core.Sections;
 //                   --filter a,b,c                section name filter ("" = any name)
 //                   --include-readonly            also select read-only sections
 //                   --all                         select every readable section
-// More commands (scan, write) arrive in T0.4.
+//   scan            interactive first/next scan for an exact 4-byte value, list and write
+//                   (same process and section options as `sections`)
+//                   --method local|console            skip the question
+//                   --unaligned                       scan every byte, not only 4-byte aligned
 
 var argList = args.ToList();
 var debug = TakeFlag(argList, "--debug");
@@ -26,6 +30,8 @@ var processName = TakeOption(argList, "--name");
 var filterText = TakeOption(argList, "--filter");
 var includeReadOnly = TakeFlag(argList, "--include-readonly");
 var selectAll = TakeFlag(argList, "--all");
+var method = TakeOption(argList, "--method");
+var unaligned = TakeFlag(argList, "--unaligned");
 
 var settings = PS4MemSettings.Default with { DebugLogging = debug };
 if (port is not null)
@@ -79,6 +85,12 @@ switch (command)
         return Info(settings, log);
     case "sections":
         return Sections(settings, log, pid, processName, selectAll);
+    case "scan":
+        if (settings.ConsoleIp.Length == 0)
+            return Fail(ConsoleIpResolver.NotSetMessage);
+        if (method is not (null or "local" or "console"))
+            return Fail($"Invalid --method '{method}' (use local or console).");
+        return ScanCommand.Run(settings, log, new ScanCommand.Options(pid, processName, selectAll, method, unaligned));
     case null or "help" or "--help" or "-h":
         PrintUsage(settings);
         return 0;
@@ -180,14 +192,6 @@ static void PrintSections(SectionSelection selection)
     }
 }
 
-static string SizeText(ulong bytes) => bytes switch
-{
-    >= 1UL << 30 => $"{bytes / (double)(1UL << 30):0.##} GB",
-    >= 1UL << 20 => $"{bytes / (double)(1UL << 20):0.##} MB",
-    >= 1UL << 10 => $"{bytes / (double)(1UL << 10):0.##} KB",
-    _ => $"{bytes} B",
-};
-
 static void PrintUsage(PS4MemSettings s)
 {
     Console.WriteLine($"""
@@ -199,13 +203,21 @@ static void PrintUsage(PS4MemSettings s)
           info      Show the ps4debug version and the process list (read-only).
           sections  Pick the game process and list its memory sections; ✓ marks the ones
                     a scan would use (read-only).
+          scan      Interactive scan for an exact 4-byte value (like money). After the first
+                    scan, type the new value for a next scan; `l` lists the first 20 results,
+                    `w <n> <value>` writes result #n (the only command that writes), `new`
+                    starts again, `q` quits. Ctrl+C cancels a running scan.
 
-        Sections options:
+        Sections and scan options:
           --pid <pid>         Use this process instead of the auto-picked game
           --name <name>       Use the process with this name (exact, or a unique part of it)
           --filter a,b,c      Section name filter (default {string.Join(",", s.SectionNameFilter)}; "" = any name)
           --include-readonly  Also select sections that aren't writable
           --all               Select every readable section
+
+        Scan options:
+          --method local|console  Compare on the Mac (default) or on the PS4 (ps4debug-NG)
+          --unaligned             Check every byte, not only 4-byte aligned addresses
 
         Options:
           --ip     Console IP. If not given: the {ConsoleIpResolver.EnvironmentVariable} environment variable,
@@ -213,12 +225,6 @@ static void PrintUsage(PS4MemSettings s)
           --port   ps4debug command port (default {s.CommandPort})
           --debug  Write a debug log to {s.LogDirectory}/ (same as {DebugLog.EnvironmentVariable}=1)
         """);
-}
-
-static int Fail(string message)
-{
-    Console.Error.WriteLine($"Error: {message}");
-    return 1;
 }
 
 static bool TakeFlag(List<string> list, string name) => list.Remove(name);
@@ -235,4 +241,21 @@ static string? TakeOption(List<string> list, string name)
     var value = list[i + 1];
     list.RemoveRange(i, 2);
     return value;
+}
+
+internal static partial class Program
+{
+    internal static string SizeText(ulong bytes) => bytes switch
+    {
+        >= 1UL << 30 => $"{bytes / (double)(1UL << 30):0.##} GB",
+        >= 1UL << 20 => $"{bytes / (double)(1UL << 20):0.##} MB",
+        >= 1UL << 10 => $"{bytes / (double)(1UL << 10):0.##} KB",
+        _ => $"{bytes} B",
+    };
+
+    internal static int Fail(string message)
+    {
+        Console.Error.WriteLine($"Error: {message}");
+        return 1;
+    }
 }

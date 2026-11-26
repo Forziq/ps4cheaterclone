@@ -15,9 +15,14 @@ Working now:
 - A process picker, which finds the game process.
 - Section selection with the `sections` command. It lists the memory sections a scan will use, and only reads.
 
-The protocol client also includes chunked reads and writes. The CLI doesn't expose these yet.
+The `scan` command is written and tested against a fake server. It hasn't run on a real console yet. It has:
 
-Next: scanning, starting with a 4-byte first and next scan. Writing a value comes after that.
+- A first scan and next scans for 4-byte values.
+- Writing a value with `w`. This is the only command that writes to PS4 memory.
+
+Only exact 4-byte (32-bit) values work for now. Other value types and compare types come later.
+
+Next: test `scan` on a real console.
 
 ## Planned features
 
@@ -116,6 +121,31 @@ Phase 0 needs the payload loaded by hand. From Phase 1 the app will do this itse
 
    With `--debug`, the log includes the `picker` and `maps` categories.
 
+5. Scan a game's memory for a 4-byte value:
+
+   ```bash
+   dotnet run --project src/PS4Mem.Cli -- scan --ip $PS4_IP --method local
+   ```
+
+   `scan` is interactive. It picks the game process and the default sections, the same way `sections` does, then asks for a 4-byte value. The first value you type runs a first scan. After that, typing a new value runs a next scan on the previous results.
+
+   At the prompt:
+
+   - `l` lists the first 20 results: address, value found, current value and section.
+   - `w <n> <value>` writes a value to result `n`. This is the only command that writes to PS4 memory.
+   - `new` starts over.
+   - `q` quits.
+
+   Ctrl+C cancels a running scan.
+
+   Options:
+
+   - `--method local|console` sets where the comparison happens. `local` is the default. The Mac reads the memory and compares it there, the same approach as PS4Cheater. `console` makes the PS4 do the comparison. It uses ps4debug-NG's Turbo Scan when it's available, and its SCAN_START range scan otherwise. On stock ps4debug, `console` falls back to `local`.
+   - `--unaligned` checks every byte, not only addresses that are 4-byte aligned.
+   - `--pid`, `--name`, `--filter`, `--include-readonly` and `--all` work the same as they do for `sections`.
+
+   Every scan prints and logs the hit count for each section. Every write is logged with the old and new bytes (with `--debug`).
+
 To write a debug log without the flag, set `PS4MEM_DEBUG=1`. Logs go to `logs/`, which is git-ignored. Attach the log when you report a problem.
 
 ## How it works
@@ -143,6 +173,7 @@ All defaults are in `src/PS4Mem.Core/PS4MemSettings.cs`, and you can override ea
 - Debugger port: 755.
 - GoldHEN BinLoader port: 9090.
 - Payload path: `payloads/ps4debug-ng_v1.3.4_release_2026-11-05.bin`.
+- Scan method: `local`.
 - Read chunk size: 32 MB.
 - Section name filter: `anon`, `exe`, `Game`, `dlmalloc` and `SmallBlockAllocator`.
 - Connect timeout: 5 seconds. Reads have no timeout, because scans can take minutes.
