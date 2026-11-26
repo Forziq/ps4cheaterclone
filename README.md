@@ -18,12 +18,14 @@ Working now:
 
 The `scan` command passed its first real-console test on Assassin's Creed III (PS4, GoldHEN, ps4debug-NG 1.3.4). It found an exact 4-byte value, the in-game money. A next scan narrowed the results to one address, and a write changed it. The new value showed in the game. The command has:
 
-- A first scan and next scans for 4-byte values.
+- A first scan and next scans.
+- Undo with `u`, which goes back to the previous results.
+- A result store that keeps large result sets on disk.
 - Writing a value with `w`. This is the only command that writes to PS4 memory.
 
-Only exact 4-byte (32-bit) values work for now. Other value types and compare types come later.
+Only exact 4-byte values work in the `scan` command for now.
 
-Phase 1 is in progress. The backend API (`src/PS4Mem.Api`) listens on 127.0.0.1:5080 only. It has endpoints for settings, connection, processes, sections and payload injection. More value types and the cheat list come later.
+Phase 1 is in progress. The core scanning library now has more value and compare types, unknown initial value snapshots, the result store, undo and wider console support. The API (next step) and then the Mac app will use them. The backend API (`src/PS4Mem.Api`) listens on 127.0.0.1:5080 only. It has endpoints for settings, connection, processes, sections and payload injection. More value types and the cheat list come later.
 
 ## Planned features
 
@@ -158,10 +160,13 @@ The `inject` command sends the payload for you, so you don't need to send it by 
 
    - `l` lists the first 20 results: address, value found, current value and section.
    - `w <n> <value>` writes a value to result `n`. This is the only command that writes to PS4 memory.
+   - `u` undoes the last scan and goes back to the previous results.
    - `new` starts over.
    - `q` quits.
 
    Ctrl+C cancels a running scan.
+
+   Results over 2 million are kept on disk, in `~/Library/Application Support/PS4Mem/scans`. The program deletes them when it exits. If it crashed, the leftovers are deleted the next time it starts.
 
    Options:
 

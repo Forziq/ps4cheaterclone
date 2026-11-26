@@ -329,18 +329,6 @@ public class ScanTypesEngineTests
         Assert.Equal(1, console.Calls);
     }
 
-    [Theory]
-    [InlineData(ScanValueType.UInt32, ScanCompare.Exact, true)]
-    [InlineData(ScanValueType.Int32, ScanCompare.Exact, true)]
-    [InlineData(ScanValueType.UInt32, ScanCompare.BiggerThan, false)]
-    [InlineData(ScanValueType.Float, ScanCompare.Exact, false)]
-    [InlineData(ScanValueType.UInt16, ScanCompare.Exact, false)]
-    public void Console_scanner_supports_exact_4_byte_integers_for_now(ScanValueType type, ScanCompare compare, bool expected)
-    {
-        var scanner = new ConsoleSectionScanner(new PS4DebugClient(PS4MemSettings.Default with { ConsoleIp = "192.0.2.10" }), turbo: true);
-        Assert.Equal(expected, scanner.Supports(Q(type, compare, "1")));
-    }
-
     [Fact]
     public void Hit_buffer_sorting_keeps_values_with_their_addresses()
     {

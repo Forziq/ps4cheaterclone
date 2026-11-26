@@ -252,18 +252,32 @@ public sealed class PS4DebugClient : IProcessMemory, IDisposable
     /// or Turbo START 0xBDAACC11 (27-byte body, the same plus u32 flags; flags 0 streams like the trio).
     /// Both need auth (<see cref="Authenticate"/>).
     /// <para>Body {u32 pid; u64 address; u32 length; u8 valueType; u8 compareType; u8 alignment;
-    /// u32 lenData [; u32 flags]}; status; send lenData value bytes; status; then batches of
-    /// u64 payloadLen + records {u32 offset from address; value bytes} until the u64 sentinel
-    /// 0xFFFFFFFFFFFFFFFF; then a final status. Any error status closes the connection.</para>
-    /// <paramref name="onRecord"/> gets each record's offset and value bytes.
+    /// u32 lenData [; u32 flags]}; status; send lenData pattern bytes (the value, then the second
+    /// value for ValueBetween); for ArrBytes send the mask (value size bytes, 1 = compare this byte);
+    /// status; then batches of u64 payloadLen + records {u32 offset from address; value bytes}
+    /// until the u64 sentinel 0xFFFFFFFFFFFFFFFF; then a final status (NG/source/proc.c:2186-2272).
+    /// Any error status closes the connection.</para>
+    /// <paramref name="onRecord"/> gets each record's offset and its <paramref name="valueSize"/> value bytes.
     /// </summary>
     public void ScanRange(Ps4Command command, int pid, ulong address, uint length,
         Ps4ScanValueType valueType, Ps4ScanCompareType compareType, byte alignment,
-        ReadOnlySpan<byte> value, Action<uint, ReadOnlySpan<byte>> onRecord)
+        ReadOnlySpan<byte> value, Action<uint, ReadOnlySpan<byte>> onRecord) =>
+        ScanRange(command, pid, address, length, valueType, compareType, alignment, value, [], value.Length, onRecord);
+
+    /// <inheritdoc cref="ScanRange(Ps4Command, int, ulong, uint, Ps4ScanValueType, Ps4ScanCompareType, byte, ReadOnlySpan{byte}, Action{uint, ReadOnlySpan{byte}})"/>
+    public void ScanRange(Ps4Command command, int pid, ulong address, uint length,
+        Ps4ScanValueType valueType, Ps4ScanCompareType compareType, byte alignment,
+        ReadOnlySpan<byte> pattern, ReadOnlySpan<byte> mask, int valueSize, Action<uint, ReadOnlySpan<byte>> onRecord)
     {
         if (command is not (Ps4Command.ProcScanStart or Ps4Command.TurboStart))
             throw new ArgumentException($"{command} isn't a range scan command.", nameof(command));
-        var valueBytes = value.ToArray(); // the lambda can't capture a span
+        // lenData 0 isn't guarded on the trio and Turbo refuses it (protocol.md §11.1).
+        if (pattern.IsEmpty) throw new ArgumentException("A range scan needs a value.", nameof(pattern));
+        ArgumentOutOfRangeException.ThrowIfLessThan(valueSize, 1);
+        if (!mask.IsEmpty && mask.Length != valueSize)
+            throw new ArgumentException($"The mask is {mask.Length} bytes, not the value size {valueSize}.", nameof(mask));
+        var valueBytes = pattern.ToArray(); // the lambda can't capture a span
+        var maskBytes = mask.ToArray();
         var turbo = command == Ps4Command.TurboStart;
 
         Run(command, () =>
@@ -281,9 +295,10 @@ public sealed class PS4DebugClient : IProcessMemory, IDisposable
             SendCommand(command, body);
             ExpectSuccess(command, closesOnError: true);
             SendRaw(valueBytes);
+            if (maskBytes.Length > 0) SendRaw(maskBytes);
             ExpectSuccess(command, closesOnError: true);
 
-            var recordSize = 4 + valueBytes.Length;
+            var recordSize = 4 + valueSize;
             long records = 0, batches = 0;
             Span<byte> lengthBytes = stackalloc byte[8];
             while (true)
@@ -297,14 +312,14 @@ public sealed class PS4DebugClient : IProcessMemory, IDisposable
 
                 var batch = Receive((int)payload, $"{command} results");
                 for (var o = 0; o < batch.Length; o += recordSize)
-                    onRecord(BinaryPrimitives.ReadUInt32LittleEndian(batch.AsSpan(o)), batch.AsSpan(o + 4, valueBytes.Length));
+                    onRecord(BinaryPrimitives.ReadUInt32LittleEndian(batch.AsSpan(o)), batch.AsSpan(o + 4, valueSize));
                 records += batch.Length / recordSize;
                 batches++;
             }
             ExpectSuccess(command, closesOnError: true);
             return (true, $"{records} results in {batches} batches");
         }, $"pid {pid}, 0x{address:X} +0x{length:X}, {valueType} {compareType}, alignment {alignment}, " +
-           $"value {Convert.ToHexString(valueBytes)}");
+           $"value {Convert.ToHexString(valueBytes)}" + (maskBytes.Length > 0 ? $", mask {Convert.ToHexString(maskBytes)}" : ""));
     }
 
     /// <summary>Largest believable range-scan batch; real ones are at most 0x3FFEC bytes.</summary>

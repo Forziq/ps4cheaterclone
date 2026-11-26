@@ -263,7 +263,7 @@ Same values on both sides (`NG/include/protocol.h:246-276`, `LD/PS4DBG.Proc.cs:2
 | 1 | Int8 | 1 | | 1 | FuzzyValue |
 | 2 | UInt16 | 2 | | 2 | BiggerThan |
 | 3 | Int16 | 2 | | 3 | SmallerThan |
-| 4 | UInt32 | 4 | | 4 | ValueBetween (exclusive, either order) |
+| 4 | UInt32 | 4 | | 4 | ValueBetween (legacy: exclusive, either order; range scans: inclusive, §11.4) |
 | 5 | Int32 | 4 | | 5 | IncreasedValue |
 | 6 | UInt64 | 8 | | 6 | IncreasedValueBy |
 | 7 | Int64 | 8 | | 7 | DecreasedValue |
@@ -298,6 +298,16 @@ Details (`NG/source/proc.c:2155-2272`):
 - `lenData` is **not** checked against the value size; only a zero value size is rejected
   (`:2165-2168`). The pattern buffer is `lenData` bytes (`:2180`) and the compare reads `size` bytes,
   so send `lenData = size` (4 for UInt32). `lenData = 0` is not guarded; never send it.
+- **Pattern, mask and second value** (`:2172-2204`): the pattern (`lenData` bytes) is received only
+  when the compare needs a value (`(1u << compareType) & 0x114F`, plus ValueBetween via
+  `if (is_between) needs_scan_value = true;` at `:2175`). Then, for ArrBytes only, a mask of
+  `valueLength` bytes. For ValueBetween the second value is `pattern + valueLength` (`:2204`), so
+  send `lenData = 2 × size`: the value, then the second value. ArrBytes and String take their size
+  from `lenData` (`:2163-2164`). Turbo START does the same (`NG/source/scan_turbo.c:1474-1497`).
+- Results stream in ascending offset order from one loop (`:2237-2247`). Turbo with flags 0 too: its
+  parallel path needs `TS_PARALLEL_COMPARE` 0x80 (`NG/source/scan_turbo.c:1253`).
+- Nothing rejects compares 5-10 (increased ... unchanged), but START has no previous value
+  (`pExtraValue` is NULL except for ValueBetween), so they would dereference NULL. Never send them.
 - For ExactValue the extra value is NULL (`:2204`); `proc_scan_compareValues` compares all `size`
   bytes (`:1212-1218`), unlike the legacy compare (§10).
 - No maximum `length` (`:2225`), but the field is u32. The server reads `0x8000`-byte chunks
@@ -365,6 +375,8 @@ Turbo results are freed per connection when the client disconnects (`NG/source/s
 
 ### 11.3 What PS4 Mem does
 - **LocalScan** (`CMD_PROC_READ` + compare on the Mac) is the default and the reference.
+- **Which queries go to the console:** only those whose NG compare gives the same results as local
+  (§11.4). Others fall back to LocalScan, with a log line.
 - **ConsoleScan** = Turbo if CAPS answers, otherwise the trio, both after auth.
   The classic `0xBDAA0009` is not used. Sequence: AUTH (flags `0x2`); if that fails, reconnect and
   use LocalScan (stock ps4debug). Then CAPS; if it fails, reconnect and use the trio. Each section
@@ -375,6 +387,33 @@ Turbo results are freed per connection when the client disconnects (`NG/source/s
   ends (nearby hits share one read).
 - G0 compares LocalScan and ConsoleScan counts on the same value. A mismatch means
   ConsoleScan is wrong.
+
+### 11.4 Compare semantics, and what PS4 Mem runs on the console
+Both range scans call `proc_scan_compareValues` (`NG/source/proc.c:1166-1538`). Turbo START with
+flags 0 calls it through `turboscan_policy_compare` with `turbo_compare = 0`
+(`NG/source/scan_turbo.c:22-46`, `:1158-1162`); its float policy only acts with `TS_FLOAT_SIMPLE`
+0x200 or `TS_FLOAT_EXACT` 0x400 (`NG/include/scan_float_policy.h:21-24`, `scan_turbo.c:32-34`), so with
+flags 0 it never rejects a match. Turbo's SIMD path is used for ExactValue when the step equals the
+value size and the type isn't ArrBytes or float (`scan_turbo.c:1506-1508`); it does plain equality
+(`NG/source/scan_compare_simd.c:60-68`) and returns nothing for String (`elem_size` is 0 for type 11,
+`scan_compare_simd.c:7-14`, `:46`).
+
+| Compare | NG semantics | Same as local? |
+|---|---|---|
+| ExactValue, integers | byte compare of all `size` bytes (`proc.c:1212-1218`) | yes |
+| ExactValue, float/double | scan value 0: bits == 0; else relative tolerance ≈ 1e-6 (`proc.c:877-938`, `:1183-1210`) | **no** (PS4Mem: \|a-b\| < 0.0001) |
+| ExactValue, ArrBytes | compares byte `j` only where `mask[j] == 1` (`proc.c:1170-1180`) | yes (mask 0 = `??`) |
+| ExactValue, String | byte compare over `lenData` | yes, except Turbo with a 1-byte string (SIMD, no hits) |
+| BiggerThan / SmallerThan | `mem > scan` / `mem < scan`; signed types through `int8_t*` … `int64_t*`; float/double plain IEEE; ArrBytes/String false (`proc.c:1234-1289`) | yes |
+| ValueBetween | inclusive, either order, signed casts, float/double plain IEEE (`proc.c:1290-1338`) | yes |
+| FuzzyValue | float/double `\|scan - mem\| < 1`, integers false (`proc.c` fuzzy case) | no local equivalent |
+| UnknownInitialValue | `mem != 0`; ArrBytes/String false (`proc.c:1509-1530`) | not used: a snapshot is read instead |
+
+PS4 Mem (`ConsoleSectionScanner.Map`) sends only the "yes" rows: integer exact, bigger, smaller and
+between; float/double bigger, smaller and between; ArrBytes exact with a mask; String exact (not
+1-byte strings on Turbo). Everything else, unknown initial value and every next scan run on the Mac.
+Alignment is sent as the u8 step; PS4 Mem's steps (1, 2 or 4) keep offsets on the step from
+`address` because the server's 0x8000-byte chunks are multiples of them.
 
 ## 12. `CMD_PROC_AUTH` `0xBDAACCFF` (NG only)
 
