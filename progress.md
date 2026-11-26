@@ -1,13 +1,13 @@
 # Progress
 <!-- Only the progress-writer subagent edits this file. Keep it under 60 lines. -->
-Now: T0.2 Protocol client (libdebug port) (in progress, m2 done, next m3 info CLI)
-Next: T0.2b Public repo prep (licence and README)
+Now: T0.2b Public repo prep (licence and README) (not started)
+Next: T0.3 Process picker and section selection
 Waiting on Egor: M0c untrack Claude setup files (now), M3 make the repo public (after T0.2b). Optional: M2b git email.
 Blocked: none
 
 ## Tasks  ([ ] todo · [~] in progress · [x] done · [T] waiting for Egor's test)
 [x] T0.1 Protocol research and scaffold
-[~] T0.2 Protocol client (libdebug port)
+[x] T0.2 Protocol client (libdebug port)
 [ ] T0.2b Public repo prep (licence and README)
 [ ] T0.3 Process picker and section selection
 [ ] T0.4 First/next scan and write (4-byte)
@@ -31,6 +31,7 @@ Blocked: none
 [ ] T3.4 Pointer scanner
 
 ## Log (newest first, max 12 lines)
+- 2026-11-26 T0.2 done: PS4DebugClient (connect, version, process list/info, maps, chunked read, write, clean disconnect), 30 fake-server tests, `info` CLI command.
 - 2026-11-26 T0.2 m2: process info (title ID), maps (skips end<=start), chunked 32 MB read with cancel, write; 30 tests pass.
 - 2026-11-26 T0.2 m1: PS4DebugClient connects, gets version and process list, disconnects cleanly; 20 tests pass (10 new, fake TCP server).
 - 2026-11-26 M3 done (GitHub remote). T0.2 started.
@@ -46,3 +47,4 @@ Blocked: none
 - Classic CMD_PROC_SCAN 0xBDAA0009 is broken in ps4debug-NG (re-reads each section's first page, compares N-1 bytes; protocol.md §10). PS4Cheater never used it: LocalScan over CMD_PROC_READ is the reference; ConsoleScan = Turbo/trio after auth.
 - PS4Cheater has no default section-name list; the anon/exe/Game/dlmalloc/SmallBlockAllocator list comes from PROMPT §3.3 (Egor).
 - Debug log (Core/Logging/DebugLog) is required in every new component; G0 needs logs attached (manual M7).
+- `info` has not been run on the real console yet; Egor can try it any time the payload is loaded (read-only).
