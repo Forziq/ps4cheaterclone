@@ -53,6 +53,8 @@ public enum Ps4Command : uint
     TurboCaps = 0xBDAACC10,
     /// <summary>NG only, needs auth. protocol.md §11.2 (raw literal, NG/source/proc.c:2494).</summary>
     TurboStart = 0xBDAACC11,
+    /// <summary>CMD_DEBUG_PROCESS_STOP: stop/resume a process, no debugger needed. protocol.md §13 (NG/include/protocol.h:69).</summary>
+    ProcessStop = 0xBDBB0500,
 }
 
 /// <summary>Scan value types, same on client and server (NG/include/protocol.h:246-276). protocol.md §10.1.</summary>

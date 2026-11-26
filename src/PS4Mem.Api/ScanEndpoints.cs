@@ -16,17 +16,19 @@ namespace PS4Mem.Api;
 /// <item><c>sections</c>: start addresses ("0x...") of the sections to scan; none = the default selection.</item>
 /// <item><c>aligned</c>: false scans every byte; true or none uses the alignment setting (4).</item>
 /// <item><c>method</c>: local (default) or console (falls back to local when the console can't run it).</item>
+/// <item><c>pauseGame</c>: stop the game while scanning; it is always resumed afterwards.</item>
 /// </list>
 /// </summary>
 public sealed record FirstScanRequest(
     int? Pid, string? Type, string? Compare, string? Value, string? Value2, bool? Hex,
-    IReadOnlyList<string>? Sections, bool? Aligned, string? Method);
+    IReadOnlyList<string>? Sections, bool? Aligned, string? Method, bool? PauseGame);
 
 /// <summary>
 /// Body of <c>POST /api/scan/next</c>. <c>type</c> defaults to the current results' type (it
 /// can't change); <c>compare</c> adds increased (by), decreased (by), changed and unchanged.
+/// <c>pauseGame</c> as for the first scan.
 /// </summary>
-public sealed record NextScanRequest(string? Type, string? Compare, string? Value, string? Value2, bool? Hex);
+public sealed record NextScanRequest(string? Type, string? Compare, string? Value, string? Value2, bool? Hex, bool? PauseGame);
 
 /// <summary>Hits of one section in the current results. Addresses are hex strings.</summary>
 public sealed record SectionHitsDto(string Name, string Start, ulong Size, long Hits, double Milliseconds);
@@ -35,7 +37,7 @@ public sealed record SectionHitsDto(string Name, string Start, ulong Size, long 
 public sealed record ScanStatusDto(
     string State, string? Kind, string? Query, string? Method,
     double Percent, string? Section, long Done, long Total, long Hits, double ElapsedSeconds, string? Message,
-    int? Pid, int ScanNumber, long ResultCount, string? Type, int ValueSize, string? ResultMethod, bool CanUndo,
+    bool GamePaused, int? Pid, int ScanNumber, long ResultCount, string? Type, int ValueSize, string? ResultMethod, bool CanUndo,
     IReadOnlyList<SectionHitsDto>? Sections);
 
 /// <summary>
@@ -71,7 +73,7 @@ public static class ScanEndpoints
         // GET /api/scan/progress. 400 bad input; 409 not connected, a scan is running, or no results yet.
         app.MapPost("/api/scan/first", (FirstScanRequest? request, ConnectionManager connection, ScanSession scans) =>
         {
-            request ??= new FirstScanRequest(null, null, null, null, null, null, null, null, null);
+            request ??= new FirstScanRequest(null, null, null, null, null, null, null, null, null, null);
             var pid = request.Pid ?? throw new ArgumentException("pid is required: the process you chose.");
             var type = ScanNames.ParseType(request.Type);
             var compare = ScanNames.ParseCompare(request.Compare);
@@ -80,6 +82,7 @@ public static class ScanEndpoints
             {
                 Method = ScanNames.ParseMethod(request.Method),
                 Alignment = request.Aligned == false ? 1 : null,
+                PauseGame = request.PauseGame ?? false,
             };
 
             var target = connection.GetScanTarget();
@@ -89,12 +92,13 @@ public static class ScanEndpoints
 
         app.MapPost("/api/scan/next", (NextScanRequest? request, ConnectionManager connection, ScanSession scans) =>
         {
-            request ??= new NextScanRequest(null, null, null, null, null);
+            request ??= new NextScanRequest(null, null, null, null, null, null);
             var current = scans.CurrentType ?? throw new ScanStateException("There are no scan results yet. Run a first scan.");
             var type = ScanNames.ParseType(request.Type, current);
             var compare = ScanNames.ParseCompare(request.Compare);
             var query = ScanQuery.Parse(type, compare, request.Value, request.Value2, request.Hex ?? false);
-            return Accepted(scans.StartNext(connection.GetScanTarget(), query));
+            return Accepted(scans.StartNext(connection.GetScanTarget(), query,
+                new ScanRunOptions { PauseGame = request.PauseGame ?? false }));
         });
 
         // Cancels a running scan and drops every result. 200 with the (idle) status.
@@ -206,7 +210,7 @@ public static class ScanEndpoints
     internal static ScanStatusDto ToDto(ScanStatus s) => new(
         s.State.ToString().ToLowerInvariant(), s.Kind, s.Query, s.Method,
         s.Percent, s.Section, s.Done, s.Total, s.Hits, s.ElapsedSeconds, s.Message,
-        s.Pid, s.ScanNumber, s.ResultCount, s.Type?.ShortName(), s.ValueSize, s.ResultMethod, s.CanUndo,
+        s.GamePaused, s.Pid, s.ScanNumber, s.ResultCount, s.Type?.ShortName(), s.ValueSize, s.ResultMethod, s.CanUndo,
         s.Sections?.Select(x => new SectionHitsDto(x.Section.DisplayName, Hex(x.Section.Start), x.Section.Size, x.Hits,
             Math.Round(x.Elapsed.TotalMilliseconds, 1))).ToList());
 }

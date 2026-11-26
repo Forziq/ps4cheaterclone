@@ -25,7 +25,7 @@ The `scan` command passed its first real-console test on Assassin's Creed III (P
 
 Only exact 4-byte values work in the `scan` command for now.
 
-Phase 1 is in progress. The core scanning library now has more value and compare types, unknown initial value snapshots, the result store, undo and wider console support. The API (next step) and then the Mac app will use them. The backend API (`src/PS4Mem.Api`) listens on 127.0.0.1:5080 only. It has endpoints for settings, connection, processes, sections and payload injection. More value types and the cheat list come later.
+Phase 1 is in progress. The core scanning library has more value and compare types, unknown initial value snapshots, the result store, undo and wider console support. The backend API (`src/PS4Mem.Api`) now uses that library. It listens on 127.0.0.1:5080 only. It has endpoints for settings, connection, processes, sections, payload injection and scan sessions. The cheat list, locks and per-game cheat tables come next.
 
 ## Planned features
 
@@ -37,7 +37,7 @@ It will have:
 
 - A connection bar and a process picker that suggests the game.
 - A sections panel with a name filter.
-- A scanner for 1, 2, 4 and 8-byte signed and unsigned values, float, double, strings and byte arrays with `??` wildcards. Scan types include exact, bigger, smaller, between, increased, decreased, changed, unchanged and unknown initial value. It will support undo, progress and cancel.
+- A scanner for 1, 2, 4 and 8-byte signed and unsigned values, float, double, strings and byte arrays with `??` wildcards. Scan types include exact, bigger, smaller, between, increased, decreased, changed, unchanged and unknown initial value. Undo, progress and cancel are already in the local API.
 - A results table and a cheat list with lock, and JSON import and export.
 
 After that, the plan includes export to the GoldHEN cheat JSON format, a hex viewer and editor with disassembly, a "find what writes to this address" tool using a hardware watchpoint, and a pointer scanner.
@@ -182,7 +182,39 @@ To write a debug log without the flag, set `PS4MEM_DEBUG=1`. Logs go to `logs/`,
 
 ### Local API
 
-The local API (`src/PS4Mem.Api`) has a `POST /api/inject` endpoint that does the same job as the `inject` command. The request body is optional. It takes `ip`, `payloadPath` and `loaderPort`. A path and port that work are saved in the settings. A sample request is in [`src/PS4Mem.Api/api.http`](src/PS4Mem.Api/api.http).
+The local API (`src/PS4Mem.Api`) listens on 127.0.0.1:5080 only. It has endpoints for settings, connection, processes, sections, payload injection and scan sessions. Sample calls for each are in [`src/PS4Mem.Api/api.http`](src/PS4Mem.Api/api.http).
+
+`POST /api/inject` does the same job as the `inject` command. The request body is optional. It takes `ip`, `payloadPath` and `loaderPort`. A path and port that work are saved in the settings.
+
+#### Scans
+
+A scan runs in the background. `POST /api/scan/first` and `POST /api/scan/next` answer at once with 202. Only one scan runs at a time.
+
+- `GET /api/scan/progress` streams progress as server-sent events: percent, current section and hits so far. The final event gives the result count and the hits per section.
+- `GET /api/scan/status` gives the same status once.
+- `POST /api/scan/cancel` stops a running scan and keeps the previous results.
+- `POST /api/scan/undo` goes back one scan.
+- `POST /api/scan/new` drops every result.
+- `GET /api/scan/results?offset=&limit=` returns a page of results, 5,000 rows by default, with the total count. Each row has the address, the value the scan found, the section and the offset in the section. Add `hex=true` to show the values in hex.
+- `POST /api/scan/results/values` re-reads the current values of the visible rows from the PS4. It only reads.
+
+The first scan takes these options:
+
+- Value type: u8, i8, u16, i16, u32 (the default), i32, u64, i64, f32, f64, string or bytes.
+- Compare: exact (the default), bigger than, smaller than, between or unknown initial value.
+- Hex input: with `hex: true`, the value you type is read as hexadecimal. An integer with a `0x` prefix works without the option. The same option works for next scans.
+- Sections, by start address. The default is the suggested selection.
+- 4-byte alignment, on by default. You can turn it off.
+- Method: local (the default) or console. If the console can't run the compare, the scan falls back to local.
+- `pauseGame`, described below.
+
+Next scans compare with increased, increased by, decreased, decreased by, changed or unchanged. The value type stays the same as the first scan.
+
+With `pauseGame: true`, the scan stops the game process while it reads memory. It always resumes the game afterwards, including after an error, a cancel or a disconnect. This uses ps4debug-NG's process stop command. It hasn't been tested on a real console yet.
+
+If a game is left paused, for example after the connection dropped, `POST /api/processes/{pid}/resume` resumes it.
+
+Disconnecting, or losing the connection, cancels a running scan and drops the scan results.
 
 ## How it works
 
@@ -199,7 +231,7 @@ There's no built-in address. If none is set, the CLI tells you how to set one.
 
 Safety: the app never writes to PS4 memory unless you ask it to, with a CLI command or a click in the interface.
 
-The planned design allows only one debugger at a time, and disconnecting will release locks, the debugger and any scans. These rules apply once those features arrive.
+The planned design allows only one debugger at a time, and disconnecting will also release locks and the debugger. These rules apply once those features arrive.
 
 ### Defaults
 

@@ -27,6 +27,7 @@ public sealed partial class ApiHttpFileTests
         BinaryPrimitives.WriteUInt32LittleEndian(memory.AsSpan(0x200), 1500);
         var mapsCalls = 0;
         var reads = new List<(ulong Address, int Length)>();
+        var stops = new List<byte>();
 
         // The file injects first: the fake loader takes the payload and then "starts" ps4debug.
         var commandPort = FakeLoader.FreePort();
@@ -59,6 +60,10 @@ public sealed partial class ApiHttpFileTests
                     c.Send(U32(2),
                         MapEntry("", Heap, Heap + 0x10_0000, 0, Ps4Protocol.ProtRead | Ps4Protocol.ProtWrite),
                         MapEntry("executable", 0x40_0000, 0x50_0000, 0, Ps4Protocol.ProtRead | Ps4Protocol.ProtExec));
+                }
+                else if (r.Command == Ps4Command.ProcessStop)
+                {
+                    stops.Add(r.Body[4]); // the status above is the whole reply
                 }
                 else
                 {
@@ -149,6 +154,8 @@ public sealed partial class ApiHttpFileTests
         Assert.Equal(2, Reply("Progress of the next scan").GetProperty("scanNumber").GetInt32());
         Assert.Equal(1, Reply("Undo the last scan").GetProperty("scanNumber").GetInt32());
         Assert.Equal(0, Reply("New scan").GetProperty("resultCount").GetInt64());
+        Assert.True(Reply("Resume the game").GetProperty("resumed").GetBoolean());
+        Assert.Equal([(byte)0], stops); // the resume call; the sample scans don't pause
 
         Assert.False(Reply("Disconnect").GetProperty("connected").GetBoolean());
     }

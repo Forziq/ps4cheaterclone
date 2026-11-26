@@ -183,6 +183,61 @@ public sealed class ScanEndpointTests : IDisposable
         server.WaitForScript();
     }
 
+    [Fact]
+    public async Task Pause_game_stops_the_game_around_the_scan_reads()
+    {
+        var memory = new byte[0x1000];
+        BinaryPrimitives.WriteUInt32LittleEndian(memory.AsSpan(0x10), 1500);
+        var log = new List<string>();
+
+        using var server = new FakePs4Server(c =>
+        {
+            c.Expect(Ps4Command.Version, 0);
+            c.Send(U32(3), "1.3"u8.ToArray());
+            c.Expect(Ps4Command.ProcMaps, 4);
+            c.SendStatus(Ps4Status.Success);
+            c.Send(U32(1), MapEntry("", Heap, Heap + 0x1000, 0, Ps4Protocol.ProtRead | Ps4Protocol.ProtWrite));
+
+            var stop = c.Expect(Ps4Command.ProcessStop, 5).Body;
+            log.Add($"stop {BinaryPrimitives.ReadInt32LittleEndian(stop)} state {stop[4]}");
+            c.SendStatus(Ps4Status.Success);
+            ServeRead(c, memory, []);
+            log.Add("read");
+            var resume = c.Expect(Ps4Command.ProcessStop, 5).Body;
+            log.Add($"stop {BinaryPrimitives.ReadInt32LittleEndian(resume)} state {resume[4]}");
+            c.SendStatus(Ps4Status.Success);
+
+            var manual = c.Expect(Ps4Command.ProcessStop, 5).Body; // POST /api/processes/85/resume
+            log.Add($"stop {BinaryPrimitives.ReadInt32LittleEndian(manual)} state {manual[4]}");
+            c.SendStatus(Ps4Status.Success);
+            c.Expect(Ps4Command.ConsoleEnd, 0);
+        });
+        (await _http.PutAsJsonAsync("/api/settings", new { commandPort = server.Port })).EnsureSuccessStatusCode();
+        (await _http.PostAsJsonAsync("/api/connect", new { ip = "127.0.0.1" })).EnsureSuccessStatusCode();
+
+        var first = await _http.PostAsJsonAsync("/api/scan/first", new { pid = Pid, value = "1500", pauseGame = true });
+        Assert.Equal(HttpStatusCode.Accepted, first.StatusCode);
+        var done = await WaitForDone();
+        Assert.Equal("done", done.GetProperty("state").GetString());
+        Assert.False(done.GetProperty("gamePaused").GetBoolean());
+        Assert.Equal(1, done.GetProperty("resultCount").GetInt64());
+
+        var resumed = await _http.PostAsync($"/api/processes/{Pid}/resume", null);
+        resumed.EnsureSuccessStatusCode();
+        Assert.True((await resumed.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("resumed").GetBoolean());
+
+        (await _http.PostAsync("/api/disconnect", null)).EnsureSuccessStatusCode();
+        server.WaitForScript();
+        Assert.Equal(["stop 85 state 1", "read", "stop 85 state 0", "stop 85 state 0"], log);
+    }
+
+    [Fact]
+    public async Task Resume_without_a_connection_is_409()
+    {
+        var response = await _http.PostAsync($"/api/processes/{Pid}/resume", null);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
     // ---- Helpers ----
 
     /// <summary>Answers one CMD_PROC_READ from <paramref name="memory"/> (which starts at <see cref="Heap"/>).</summary>

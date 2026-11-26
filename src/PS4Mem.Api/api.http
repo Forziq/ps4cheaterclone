@@ -55,7 +55,8 @@ GET {{host}}/api/processes/{{pid}}/maps?all=true
 # Other fields: "type" (u8 i8 u16 i16 u32 i32 u64 i64 f32 f64 string bytes), "compare" (exact,
 # bigger than, smaller than, between with "value2", unknown initial value), "hex": true,
 # "sections": ["0x200000000", ...] (start addresses; none = the default selection),
-# "aligned": false (every byte), "method": "console" (compare on the PS4 when it can).
+# "aligned": false (every byte), "method": "console" (compare on the PS4 when it can),
+# "pauseGame": true (stop the game while scanning; always resumed afterwards, also for next scans).
 # 409 while another scan runs.
 POST {{host}}/api/scan/first
 Content-Type: application/json
@@ -107,6 +108,10 @@ POST {{host}}/api/scan/cancel
 
 ### New scan: drops every result
 POST {{host}}/api/scan/new
+
+### Resume the game if it was left paused (scans with pauseGame resume it themselves; this is
+# for a game left stopped, e.g. after the connection dropped mid-scan)
+POST {{host}}/api/processes/{{pid}}/resume
 
 ### Disconnect (always 200)
 POST {{host}}/api/disconnect

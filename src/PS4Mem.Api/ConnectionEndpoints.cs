@@ -84,6 +84,14 @@ public static class ConnectionEndpoints
         app.MapGet("/api/processes/{pid:int}", (int pid, ConnectionManager connection) =>
             connection.GetProcessInfo(pid));
 
+        // Resumes a stopped process. Scans with pauseGame resume the game themselves; this is for a
+        // game left paused (e.g. the connection dropped mid-scan). 200 with {"pid", "resumed": true}.
+        app.MapPost("/api/processes/{pid:int}/resume", (int pid, ConnectionManager connection) =>
+        {
+            connection.ResumeProcess(pid);
+            return new { pid, resumed = true };
+        });
+
         // ?filter=anon,exe   name filter instead of the default ("" = any name)
         // ?includeReadOnly=true   also select read-only sections
         // ?all=true   select every section

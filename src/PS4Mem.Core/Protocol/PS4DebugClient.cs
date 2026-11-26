@@ -14,7 +14,7 @@ namespace PS4Mem.Core.Protocol;
 /// One lock guards the socket, so each command's request and reply never interleave with
 /// another thread's. There is a connect timeout and no read timeout (scans take minutes).
 /// </summary>
-public sealed class PS4DebugClient : IProcessMemory, IDisposable
+public sealed class PS4DebugClient : IProcessMemory, IProcessControl, IDisposable
 {
     private const string Cat = "proto";
 
@@ -384,6 +384,28 @@ public sealed class PS4DebugClient : IProcessMemory, IDisposable
         }, $"pid {pid}, 0x{address:X}, {bytes.Length} bytes: {Convert.ToHexString(bytes.AsSpan(0, Math.Min(bytes.Length, 16)))}" +
            (bytes.Length > 16 ? "..." : ""));
     }
+
+    /// <summary>Pauses the game: CMD_DEBUG_PROCESS_STOP with state 1 (see <see cref="SetProcessState"/>).</summary>
+    public void StopProcess(int pid) => SetProcessState(pid, 1);
+
+    /// <summary>Resumes the game: CMD_DEBUG_PROCESS_STOP with state 0.</summary>
+    public void ResumeProcess(int pid) => SetProcessState(pid, 0);
+
+    /// <summary>
+    /// CMD_DEBUG_PROCESS_STOP 0xBDBB0500 (protocol.md §13, NG/source/debug.c:241-275): body
+    /// {u32 pid; u8 state}, 5 bytes, state 0 = resume, 1 = stop; reply u32 status. Works without
+    /// an attached debugger (the server calls kill()). An error status closes the connection; a
+    /// server without the command closes it too.
+    /// </summary>
+    private void SetProcessState(int pid, byte state) => Run(Ps4Command.ProcessStop, () =>
+    {
+        var body = new byte[5];
+        BinaryPrimitives.WriteInt32LittleEndian(body, pid);
+        body[4] = state;
+        SendCommand(Ps4Command.ProcessStop, body);
+        ExpectSuccess(Ps4Command.ProcessStop, closesOnError: true);
+        return (true, state == 1 ? "stopped" : "resumed");
+    }, $"pid {pid}, state {state} ({(state == 1 ? "stop" : "resume")})");
 
     private static byte[] PidBody(int pid)
     {

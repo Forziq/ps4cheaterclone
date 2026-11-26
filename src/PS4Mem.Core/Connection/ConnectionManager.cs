@@ -276,7 +276,7 @@ public sealed class ConnectionManager : IDisposable
     public ScanTarget GetScanTarget()
     {
         var (client, settings) = Session();
-        return new ScanTarget(client, settings, Log, () => ConsoleScanner(client));
+        return new ScanTarget(client, settings, Log, () => ConsoleScanner(client), client);
     }
 
     private (ISectionScanner? Scanner, string Reason) ConsoleScanner(PS4DebugClient client)
@@ -295,6 +295,16 @@ public sealed class ConnectionManager : IDisposable
             }
             return _consoleScanner.Value;
         }
+    }
+
+    /// <summary>
+    /// Resumes a stopped process (CMD_DEBUG_PROCESS_STOP state 0). Scans resume the game they
+    /// paused by themselves; this is for a game left paused, e.g. after a lost connection.
+    /// </summary>
+    public void ResumeProcess(int pid)
+    {
+        var (client, _) = Session();
+        Run(() => { client.ResumeProcess(pid); return true; });
     }
 
     public void Dispose() => Disconnect();

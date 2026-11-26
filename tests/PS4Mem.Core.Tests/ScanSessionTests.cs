@@ -40,8 +40,11 @@ public sealed class ScanSessionTests : IDisposable
         new(new MemoryMap("", Base + 0x1000, Base + 0x2000, 0, 3), true, "test"),
     ];
 
-    private ScanTarget Target(IProcessMemory? memory = null, Func<(ISectionScanner?, string)>? console = null) =>
-        new(memory ?? _memory, Settings, DebugLog.Disabled, console);
+    private ScanTarget Target(IProcessMemory? memory = null, Func<(ISectionScanner?, string)>? console = null,
+        IProcessControl? control = null) =>
+        new(memory ?? _memory, Settings, DebugLog.Disabled, console, control);
+
+    private static readonly ScanRunOptions Paused = new() { PauseGame = true };
 
     private static ScanQuery Exact(uint value) => ScanQuery.ExactUInt32(value);
 
@@ -326,6 +329,150 @@ public sealed class ScanSessionTests : IDisposable
         Assert.Equal(5, values.Length);
         Assert.Equal(7u, BitConverter.ToUInt32(values[4]));
         Assert.Equal([(0x1000UL, 8), (0x1100UL, 4), (0x9000UL, 0xC)], _memory.Reads);
+    }
+
+    // ---- m3: pause the game during scans ----
+
+    [Fact]
+    public void Pause_game_stops_before_the_first_read_and_resumes_after_the_last()
+    {
+        var events = new List<string>();
+        var control = new FakeControl(events);
+        _memory.OnRead = a => { lock (events) events.Add("read"); };
+
+        _session.StartFirst(Target(control: control), Pid, Sections, Exact(1500), Paused);
+        var s = WaitForScan();
+
+        Assert.Equal(ScanState.Done, s.State);
+        Assert.False(s.GamePaused);
+        Assert.Equal("stop 85", events[0]);
+        Assert.Equal("resume 85", events[^1]);
+        Assert.Equal(1, events.Count(e => e.StartsWith("resume")));
+        Assert.All(events[1..^1], e => Assert.Equal("read", e));
+    }
+
+    [Fact]
+    public void Status_shows_the_game_paused_while_the_scan_runs()
+    {
+        var control = new FakeControl([]);
+        using var gate = new Gate(_memory, pass: 0);
+        _session.StartFirst(Target(control: control), Pid, Sections, Exact(1500), Paused);
+        gate.WaitForRead(1);
+
+        Assert.True(_session.Status.GamePaused);
+        gate.Open();
+        Assert.False(WaitForScan().GamePaused);
+    }
+
+    [Fact]
+    public void Next_scan_can_pause_the_game_too()
+    {
+        _session.StartFirst(Target(), Pid, Sections, Exact(1500));
+        WaitForScan();
+        var events = new List<string>();
+
+        _session.StartNext(Target(control: new FakeControl(events)), Exact(1500), Paused);
+
+        Assert.Equal(ScanState.Done, WaitForScan().State);
+        Assert.Equal(["stop 85", "resume 85"], events);
+    }
+
+    [Fact]
+    public void Game_is_resumed_after_a_cancel()
+    {
+        var events = new List<string>();
+        using var gate = new Gate(_memory, pass: 0);
+        _session.StartFirst(Target(control: new FakeControl(events)), Pid, Sections, Exact(1500), Paused);
+        gate.WaitForRead(1);
+        _session.Cancel();
+        gate.Open();
+
+        Assert.Equal(ScanState.Cancelled, WaitForScan().State);
+        Assert.Equal(["stop 85", "resume 85"], events);
+    }
+
+    [Fact]
+    public void Game_is_resumed_after_a_failed_read()
+    {
+        var events = new List<string>();
+        var broken = new FakeProcessMemory { OnRead = _ => throw new Ps4ProtocolException("boom") };
+
+        _session.StartFirst(Target(broken, control: new FakeControl(events)), Pid, Sections, Exact(1500), Paused);
+
+        Assert.Equal(ScanState.Failed, WaitForScan().State);
+        Assert.Equal(["stop 85", "resume 85"], events);
+    }
+
+    [Fact]
+    public void Release_resumes_the_game_at_once_while_the_scan_is_still_stopping()
+    {
+        var events = new List<string>();
+        using var gate = new Gate(_memory, pass: 0);
+        _session.StartFirst(Target(control: new FakeControl(events)), Pid, Sections, Exact(1500), Paused);
+        gate.WaitForRead(1);
+
+        _session.Release();
+        Assert.Equal(["stop 85", "resume 85"], events); // before the scan thread has stopped
+
+        gate.Open();
+        Assert.Equal(ScanState.Cancelled, WaitForScan().State);
+        Assert.Equal(["stop 85", "resume 85"], events); // not resumed twice
+    }
+
+    [Fact]
+    public void A_failed_pause_fails_the_scan_without_reading()
+    {
+        var control = new FakeControl([]) { FailStop = true };
+
+        _session.StartFirst(Target(control: control), Pid, Sections, Exact(1500), Paused);
+
+        var s = WaitForScan();
+        Assert.Equal(ScanState.Failed, s.State);
+        Assert.Contains("Couldn't pause the game", s.Message);
+        Assert.Empty(_memory.Reads);
+        Assert.False(s.GamePaused);
+    }
+
+    [Fact]
+    public void A_failed_resume_is_reported_in_the_status()
+    {
+        var control = new FakeControl([]) { FailResume = true };
+
+        _session.StartFirst(Target(control: control), Pid, Sections, Exact(1500), Paused);
+
+        var s = WaitForScan();
+        Assert.Equal(ScanState.Done, s.State);
+        Assert.Contains("couldn't be resumed", s.Message);
+        Assert.Contains("/api/processes/85/resume", s.Message);
+    }
+
+    [Fact]
+    public void Pause_without_process_control_fails_clearly()
+    {
+        _session.StartFirst(Target(), Pid, Sections, Exact(1500), Paused);
+
+        var s = WaitForScan();
+        Assert.Equal(ScanState.Failed, s.State);
+        Assert.Contains("can't pause the game", s.Message);
+        Assert.Empty(_memory.Reads);
+    }
+
+    private sealed class FakeControl(List<string> events) : IProcessControl
+    {
+        public bool FailStop { get; init; }
+        public bool FailResume { get; init; }
+
+        public void StopProcess(int pid)
+        {
+            if (FailStop) throw new Ps4StatusException(Ps4Command.ProcessStop, Ps4Status.Error, true);
+            lock (events) events.Add($"stop {pid}");
+        }
+
+        public void ResumeProcess(int pid)
+        {
+            if (FailResume) throw new Ps4ProtocolException("connection lost");
+            lock (events) events.Add($"resume {pid}");
+        }
     }
 
     /// <summary>Lets <c>pass</c> reads through, then blocks the next ones until <see cref="Open"/>, to look at a running scan.</summary>

@@ -415,4 +415,48 @@ public class PS4DebugClientTests
         Assert.Contains("[ERROR] [proto] ProcList failed", text);
         Assert.Contains("DataNull (0xF0000003)", text);
     }
+
+    // ---- T1.5 m3: pause the game (CMD_DEBUG_PROCESS_STOP, protocol.md §13) ----
+
+    [Fact]
+    public void Stop_and_resume_send_pid_and_state_in_a_5_byte_body()
+    {
+        var bodies = new List<byte[]>();
+        using var server = new FakePs4Server(c =>
+        {
+            for (var i = 0; i < 2; i++)
+            {
+                bodies.Add(c.Expect(Ps4Command.ProcessStop, 5).Body);
+                c.SendStatus(Ps4Status.Success);
+            }
+            c.Expect(Ps4Command.ConsoleEnd, 0);
+        });
+        using var client = ConnectTo(server);
+
+        client.StopProcess(85);
+        client.ResumeProcess(85);
+        Assert.True(client.IsConnected);
+        client.Dispose();
+        server.WaitForScript();
+
+        Assert.Equal(0xBDBB0500u, (uint)Ps4Command.ProcessStop);
+        Assert.Equal([0x55, 0, 0, 0, 1], bodies[0]);
+        Assert.Equal([0x55, 0, 0, 0, 0], bodies[1]);
+    }
+
+    [Fact]
+    public void Stop_error_closes_the_connection()
+    {
+        using var server = new FakePs4Server(c =>
+        {
+            c.Expect(Ps4Command.ProcessStop, 5);
+            c.SendStatus(Ps4Status.Error);
+            c.Close();
+        });
+        using var client = ConnectTo(server);
+
+        var e = Assert.Throws<Ps4StatusException>(() => client.StopProcess(85));
+        Assert.True(e.ConnectionClosed);
+        Assert.False(client.IsConnected);
+    }
 }

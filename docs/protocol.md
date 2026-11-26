@@ -464,6 +464,10 @@ Source: `NG/include/protocol.h:69`, dispatch `NG/source/debug.c:1097`, handler `
   `CMD_ERROR` and closes the connection if no debugger is attached, and maps 1 to `PT_CONTINUE`
   with signal 17. Whether that actually pauses is unclear (§15), so PS4 Mem doesn't use it to pause.
 
+PS4 Mem sends it from `PS4DebugClient.StopProcess` / `ResumeProcess` (state 1 / 0): scans with
+`pauseGame` stop the game before reading and always resume it (done, failed, cancelled or
+disconnected), and `POST /api/processes/{pid}/resume` resumes a game left stopped.
+
 Both are **untested on the console**. G0/G1 must check that stop and resume work on the game.
 
 ## 14. Section selection defaults

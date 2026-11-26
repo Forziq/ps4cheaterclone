@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using PS4Mem.Core.Logging;
+using PS4Mem.Core.Protocol;
 using PS4Mem.Core.Sections;
 
 namespace PS4Mem.Core.Scanning;
@@ -25,6 +26,12 @@ public sealed record ScanRunOptions
 
     /// <summary>Scan step; null uses <see cref="PS4MemSettings.ScanAlignment"/>, 1 = every byte.</summary>
     public int? Alignment { get; init; }
+
+    /// <summary>
+    /// Stop the game while the scan reads its memory, so values can't change mid-scan. The game
+    /// is always resumed afterwards: done, failed, cancelled or disconnected.
+    /// </summary>
+    public bool PauseGame { get; init; }
 }
 
 /// <summary>
@@ -62,6 +69,9 @@ public sealed record ScanStatus
 
     /// <summary>Why the scan failed or was cancelled, or a note such as a console scan fallback.</summary>
     public string? Message { get; init; }
+
+    /// <summary>True while this scan has the game stopped ("pause the game during scans").</summary>
+    public bool GamePaused { get; init; }
 
     // ---- The current results (what the results table shows) ----
 
@@ -220,8 +230,9 @@ public sealed class ScanSession : IDisposable
     /// <summary>Starts a next scan of the current results in the background.</summary>
     /// <exception cref="ArgumentException">Wrong type, or a first-scan-only compare.</exception>
     /// <exception cref="ScanStateException">A scan is running, or there are no results yet.</exception>
-    public ScanStatus StartNext(ScanTarget target, ScanQuery query)
+    public ScanStatus StartNext(ScanTarget target, ScanQuery query, ScanRunOptions? options = null)
     {
+        options ??= new ScanRunOptions();
         if (!query.Compare.AllowedOnNextScan())
             throw new ArgumentException($"'{query.Compare.ShortName()}' is for a first scan only.");
 
@@ -234,7 +245,8 @@ public sealed class ScanSession : IDisposable
                 throw new ArgumentException($"The previous scan was {previous.Type.ShortName()}, not {query.Type.ShortName()}: " +
                                             "start a new scan to change the type.");
             return Start(target, new Run("next", query, ScanMethod.Local, previous.Pid),
-                (engine, o, ct) => engine.NextScan(previous, query, o, ct), new ScanRunOptions());
+                (engine, o, ct) => engine.NextScan(previous, query, o, ct),
+                new ScanRunOptions { PauseGame = options.PauseGame });
         }
     }
 
@@ -301,6 +313,8 @@ public sealed class ScanSession : IDisposable
             {
                 _log.Info(Cat, "Disconnect: cancelling the running scan; its results will be dropped");
                 _cancel?.Cancel();
+                // Resume now: after this the connection is gone and the scan thread can't.
+                _run.Pause?.Resume();
             }
             else
             {
@@ -321,6 +335,7 @@ public sealed class ScanSession : IDisposable
             _disposed = true;
             _generation++;
             _cancel?.Cancel();
+            _run?.Pause?.Resume();
             task = _task;
         }
         // Scans stop at the next chunk; a console scan piece can take a while, so wait generously.
@@ -347,6 +362,7 @@ public sealed class ScanSession : IDisposable
         public Stopwatch Watch { get; } = Stopwatch.StartNew();
         public volatile ScanProgress? Progress;
         public volatile string? Note;
+        public volatile GamePause? Pause;
         public ScanState State = ScanState.Running;
         public string? Message;
         public TimeSpan? Elapsed;
@@ -363,7 +379,8 @@ public sealed class ScanSession : IDisposable
         var generation = _generation;
         _run = run;
         _cancel = cancel;
-        _log.Info(Cat, $"Starting {run.Kind} scan: pid {run.Pid}, {run.Query}, method {run.Method.Name()}");
+        _log.Info(Cat, $"Starting {run.Kind} scan: pid {run.Pid}, {run.Query}, method {run.Method.Name()}" +
+                       (options.PauseGame ? ", game paused during the scan" : ""));
         // The task can't finish before this lock is released, since Finish takes it.
         _task = Task.Factory.StartNew(() => Execute(target, run, scan, options, storage, generation, cancel.Token),
             CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
@@ -390,6 +407,9 @@ public sealed class ScanSession : IDisposable
                 }
             }
 
+            if (options.PauseGame)
+                PauseGame(target, run, generation);
+
             var engine = new ScanEngine(target.Memory, target.Settings, target.Log, console, storage);
             results = scan(engine, new ScanOptions
             {
@@ -402,7 +422,63 @@ public sealed class ScanSession : IDisposable
         {
             error = e;
         }
+        finally
+        {
+            run.Pause?.Resume();
+        }
         Finish(target.Log, run, results, error, generation);
+    }
+
+    /// <summary>
+    /// Stops the game. Under the session lock, so <see cref="Release"/> either runs first (and the
+    /// game is never stopped) or sees the pause and resumes it while the connection is still open.
+    /// </summary>
+    private void PauseGame(ScanTarget target, Run run, long generation)
+    {
+        lock (_lock)
+        {
+            if (generation != _generation) throw new OperationCanceledException();
+            var control = target.Control
+                ?? throw new InvalidOperationException("This connection can't pause the game.");
+            try
+            {
+                control.StopProcess(run.Pid);
+            }
+            catch (Ps4ProtocolException e)
+            {
+                throw new Ps4ProtocolException(
+                    $"Couldn't pause the game ({e.Message}). Pausing needs ps4debug-NG; scan without \"pause game\".", e);
+            }
+            run.Pause = new GamePause(control, run.Pid, target.Log);
+            target.Log.Info(Cat, $"Game paused for the scan (pid {run.Pid})");
+        }
+    }
+
+    /// <summary>A stopped game. <see cref="Resume"/> runs once, whoever calls it first.</summary>
+    private sealed class GamePause(IProcessControl control, int pid, DebugLog log)
+    {
+        private int _resumed;
+
+        public bool Resumed => Volatile.Read(ref _resumed) == 1;
+
+        /// <summary>Why the resume failed, for the status message.</summary>
+        public string? Error { get; private set; }
+
+        public void Resume()
+        {
+            if (Interlocked.Exchange(ref _resumed, 1) == 1) return;
+            try
+            {
+                control.ResumeProcess(pid);
+                log.Info(Cat, $"Game resumed (pid {pid})");
+            }
+            catch (Exception e)
+            {
+                Error = $"The game couldn't be resumed ({e.Message}). Reconnect and resume it with " +
+                        $"POST /api/processes/{pid}/resume, or restart the game.";
+                log.Error(Cat, $"Resuming pid {pid} failed: the game may still be paused", e);
+            }
+        }
     }
 
     private void Finish(DebugLog log, Run run, ScanResults? results, Exception? error, long generation)
@@ -459,7 +535,7 @@ public sealed class ScanSession : IDisposable
         var progress = run?.Progress;
         var running = run?.State == ScanState.Running;
         var percent = run?.State == ScanState.Done ? 100 : Math.Round((progress?.Fraction ?? 0) * 100, 1);
-        var message = string.Join(" ", new[] { run?.Note, run?.Message }.Where(m => !string.IsNullOrEmpty(m)));
+        var message = string.Join(" ", new[] { run?.Note, run?.Message, run?.Pause?.Error }.Where(m => !string.IsNullOrEmpty(m)));
         return new ScanStatus
         {
             State = run?.State ?? ScanState.Idle,
@@ -473,6 +549,7 @@ public sealed class ScanSession : IDisposable
             Hits = progress?.Hits ?? 0,
             ElapsedSeconds = Math.Round((run?.Elapsed ?? run?.Watch.Elapsed ?? TimeSpan.Zero).TotalSeconds, 1),
             Message = message.Length > 0 ? message : null,
+            GamePaused = run?.Pause is { Resumed: false },
             Pid = current?.Pid,
             ScanNumber = current?.ScanNumber ?? 0,
             ResultCount = current?.Count ?? 0,
