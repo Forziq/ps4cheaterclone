@@ -65,6 +65,7 @@ public sealed class ConnectionManager : IDisposable
     private ConnectionStatus? _connected;
     private string? _lastError;
     private (ISectionScanner? Scanner, string Reason)? _consoleScanner; // per connection, made on first use
+    private ScanReaderPool? _readers;   // extra connections for scan reads, opened on the first scan
     private int _injecting; // 1 while an injection runs (it waits up to 20 s, outside the lock)
 
     public ConnectionManager(AppSettingsStore store, IpSources ipSources, DebugLogSwitch logs, PS4MemSettings? defaults = null)
@@ -208,6 +209,8 @@ public sealed class ConnectionManager : IDisposable
 
             _client = client;
             _sessionSettings = settings;
+            _readers = new ScanReaderPool(() => new PS4DebugClient(settings, log), settings.ScanReadConnections, log,
+                settings.ConnectTimeout);
             _lastError = null;
             _connected = new ConnectionStatus(true, resolved.Ip, settings.CommandPort, version,
                 DateTimeOffset.Now, log.FilePath, resolved.Ip, resolved.Source, null);
@@ -276,7 +279,24 @@ public sealed class ConnectionManager : IDisposable
     public ScanTarget GetScanTarget()
     {
         var (client, settings) = Session();
-        return new ScanTarget(client, settings, Log, () => ConsoleScanner(client), client);
+        return new ScanTarget(client, settings, Log, () => ConsoleScanner(client), client, ct => ScanReaders(client, ct));
+    }
+
+    /// <summary>
+    /// The connections a scan reads with (<see cref="ScanReaderPool"/>). Opening them takes about
+    /// a second the first time, so it happens outside the connection lock.
+    /// </summary>
+    private IReadOnlyList<IProcessMemory> ScanReaders(PS4DebugClient client, CancellationToken cancel)
+    {
+        ScanReaderPool pool;
+        lock (_gate)
+        {
+            DropIfLost();
+            if (!ReferenceEquals(client, _client) || _readers is null)
+                throw ConnectionStateException.NotConnected();
+            pool = _readers;
+        }
+        return pool.Acquire(cancel);
     }
 
     private (ISectionScanner? Scanner, string Reason) ConsoleScanner(PS4DebugClient client)
@@ -355,6 +375,8 @@ public sealed class ConnectionManager : IDisposable
             Log.Error(Cat, "Releasing the connection's scans failed", e);
         }
         _consoleScanner = null;
+        _readers?.Dispose();
+        _readers = null;
         _client?.Dispose(); // sends CMD_CONSOLE_END when the socket is still open
         _client = null;
         _sessionSettings = null;

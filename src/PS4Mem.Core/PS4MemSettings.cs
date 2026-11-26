@@ -61,6 +61,14 @@ public sealed record PS4MemSettings
     public int ScanChunkBytes { get; init; } = 4 * 1024 * 1024;
 
     /// <summary>
+    /// Extra ps4debug connections that local scans read with at the same time. One connection is
+    /// slow because ps4debug sends each read in 64 KB steps and waits for each to go out;
+    /// PS4Cheater scans with 3 (docs/research/scan-speed.md). ps4debug allows 8 clients, the main
+    /// connection being one. 0 reads on the main connection only.
+    /// </summary>
+    public int ScanReadConnections { get; init; } = 3;
+
+    /// <summary>
     /// Scan step in bytes: 4 = 4-byte alignment (the default, like PS4Cheater), 1 = every byte.
     /// Each type caps it at its own step (u8 and strings 1, u16 2), like PS4Cheater.
     /// </summary>

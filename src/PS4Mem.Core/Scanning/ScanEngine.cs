@@ -30,8 +30,10 @@ public sealed record ScanOptions
 /// <summary>
 /// First scan and next scan for every value type and compare (<see cref="ScanQuery"/>).
 /// <list type="bullet">
-/// <item>First scan: each section goes through a back end (<see cref="LocalSectionScanner"/>
-/// by default; the console scanner when asked and it supports the query, else local).</item>
+/// <item>First scan: local by default: every section is read in <see cref="PS4MemSettings.ScanChunkBytes"/>
+/// chunks with all read connections at once (<see cref="ParallelReader"/>) and compared here, in
+/// address order, so results don't depend on how many connections read. The console scanner
+/// runs instead when asked and it supports the query.</item>
 /// <item>Next scan: re-reads the previous hits on the Mac, batching nearby addresses into one read,
 /// and keeps the ones that match, comparing with the typed value or the previous value.</item>
 /// </list>
@@ -46,25 +48,33 @@ public sealed class ScanEngine
     private const string Cat = "scan";
 
     private readonly IProcessMemory _memory;
+    private readonly IReadOnlyList<IProcessMemory> _readers;
     private readonly PS4MemSettings _settings;
     private readonly DebugLog _log;
-    private readonly ISectionScanner _local;
     private readonly ISectionScanner? _console;
     private readonly ScanStorage? _storage;
 
     /// <param name="storage">Where big result sets spill to disk; null keeps everything in memory.</param>
+    /// <param name="readers">
+    /// Connections that local scans read with, in parallel (<see cref="ParallelReader"/>); null or
+    /// empty reads with <paramref name="memory"/> only. Results are the same either way.
+    /// </param>
     public ScanEngine(IProcessMemory memory, PS4MemSettings? settings = null, DebugLog? log = null,
-        ISectionScanner? consoleScanner = null, ScanStorage? storage = null)
+        ISectionScanner? consoleScanner = null, ScanStorage? storage = null,
+        IReadOnlyList<IProcessMemory>? readers = null)
     {
         _memory = memory;
+        _readers = readers is { Count: > 0 } ? readers : [memory];
         _settings = settings ?? PS4MemSettings.Default;
         _log = log ?? DebugLog.Disabled;
-        _local = new LocalSectionScanner(memory, _settings);
         _console = consoleScanner;
         _storage = storage;
     }
 
     public bool HasConsoleScanner => _console is not null;
+
+    /// <summary>How many connections local scans read with.</summary>
+    public int ReaderCount => _readers.Count;
 
     /// <summary>The scan step for <paramref name="type"/>: the alignment option capped by the type's own step.</summary>
     public static int EffectiveAlignment(ScanValueType type, int alignment)
@@ -90,22 +100,24 @@ public sealed class ScanEngine
         if (query.Compare == ScanCompare.UnknownInitial)
             return SnapshotScan(pid, sections, query, options, cancel);
 
-        var scanner = _local;
+        ISectionScanner? scanner = null; // null = local
         if (options.Method == ScanMethod.Console)
         {
             scanner = _console ?? throw new InvalidOperationException("Console scan isn't available on this connection.");
             if (!scanner.Supports(query))
             {
                 _log.Warn(Cat, $"Console scan can't run '{query}'; scanning locally instead");
-                scanner = _local;
+                scanner = null;
             }
         }
+        var method = scanner?.Name ?? "local";
         var alignment = EffectiveAlignment(query.Type, options.Alignment ?? _settings.ScanAlignment);
 
         var list = sections.OrderBy(s => s.Start).ToList();
         var totalBytes = list.Aggregate(0L, (sum, s) => sum + (long)s.Size);
-        _log.Info(Cat, $"First scan ({scanner.Name}): pid {pid}, {query}, " +
-                       $"alignment {alignment}, {list.Count} sections, {totalBytes} bytes");
+        _log.Info(Cat, $"First scan ({method}): pid {pid}, {query}, " +
+                       $"alignment {alignment}, {list.Count} sections, {totalBytes} bytes" +
+                       (scanner is null ? $", {_readers.Count} read connection(s)" : ""));
 
         var watch = Stopwatch.StartNew();
         using var hits = NewBuffer(size);
@@ -113,16 +125,35 @@ public sealed class ScanEngine
         long done = 0;
         try
         {
-            foreach (var section in list)
+            if (scanner is null)
             {
-                var first = hits.Count;
-                var sectionWatch = Stopwatch.StartNew();
-                scanner.ScanSection(pid, section, query, alignment, hits, bytes =>
+                // Local: every section's chunks through all readers, compared here in address order.
+                var matcher = ValueMatcher.Create(query, size, _settings.UnknownInitialSkipZeros);
+                long first = 0;
+                ReadSections(pid, list, size, cancel,
+                    begin: _ => first = hits.Count,
+                    chunk: (s, data, own, address) =>
+                    {
+                        matcher.FindAll(data, own, address, alignment, hits);
+                        done += own;
+                        options.Progress?.Invoke(new ScanProgress(list[s].Name, done, totalBytes, hits.Count));
+                    },
+                    end: (s, elapsed) => stats.Add(SectionFinished(
+                        new SectionScanStats(list[s], first, hits.Count - first, elapsed), options)));
+            }
+            else
+            {
+                foreach (var section in list)
                 {
-                    done += bytes;
-                    options.Progress?.Invoke(new ScanProgress(section.Name, done, totalBytes, hits.Count));
-                }, cancel);
-                stats.Add(SectionFinished(new SectionScanStats(section, first, hits.Count - first, sectionWatch.Elapsed), options));
+                    var first = hits.Count;
+                    var sectionWatch = Stopwatch.StartNew();
+                    scanner.ScanSection(pid, section, query, alignment, hits, bytes =>
+                    {
+                        done += bytes;
+                        options.Progress?.Invoke(new ScanProgress(section.Name, done, totalBytes, hits.Count));
+                    }, cancel);
+                    stats.Add(SectionFinished(new SectionScanStats(section, first, hits.Count - first, sectionWatch.Elapsed), options));
+                }
             }
         }
         catch (OperationCanceledException)
@@ -131,7 +162,7 @@ public sealed class ScanEngine
             throw;
         }
 
-        return Finish(pid, 1, scanner.Name, query, hits, stats, watch.Elapsed);
+        return Finish(pid, 1, method, query, hits, stats, watch.Elapsed);
     }
 
     /// <summary>Exact u32 next scan (the Phase 0 scan).</summary>
@@ -169,54 +200,49 @@ public sealed class ScanEngine
         var watch = Stopwatch.StartNew();
         using var hits = NewBuffer(size, (int)Math.Min(int.MaxValue / 16, Math.Max(16, previous.Count / 4)));
         var stats = new List<SectionScanStats>(previous.Sections.Count);
-        var buffer = Array.Empty<byte>();
-        long checkedCount = 0, reads = 0;
+        long checkedCount = 0, reads = 0, bytes = 0;
+        var sections = previous.Sections;
+        var readWatch = Stopwatch.StartNew();
         try
         {
-            foreach (var old in previous.Sections)
+            long first = 0;
+            var current = -1;
+            var sectionWatch = Stopwatch.StartNew();
+            void EndSection()
             {
-                var first = hits.Count;
-                var sectionWatch = Stopwatch.StartNew();
-                var end = old.FirstResult + old.Hits;
-                for (var i = old.FirstResult; i < end;)
+                if (current < 0) return;
+                stats.Add(SectionFinished(new SectionScanStats(sections[current].Section, first, hits.Count - first,
+                    sectionWatch.Elapsed), options));
+            }
+
+            ParallelReader.Run(_readers, pid, Batches(previous, size, maxGap, maxBatch),
+                b => new ReadRange(b.Start, b.Length),
+                (b, data) =>
                 {
                     cancel.ThrowIfCancellationRequested();
-
-                    // Grow the batch while the next hit is close and the read stays small enough.
-                    var batchStart = previous.AddressAt(i);
-                    var batchEnd = batchStart + (ulong)size;
-                    var j = i + 1;
-                    // Addresses are sorted; unaligned hits can overlap the batch end (gap 0).
-                    while (j < end)
+                    if (b.Section != current)
                     {
-                        var next = previous.AddressAt(j);
-                        if ((next > batchEnd ? next - batchEnd : 0) > maxGap || next + (ulong)size - batchStart > maxBatch)
-                            break;
-                        batchEnd = Math.Max(batchEnd, next + (ulong)size);
-                        j++;
+                        EndSection();
+                        sectionWatch.Restart();
+                        current = b.Section;
+                        first = hits.Count;
                     }
-
-                    var length = (int)(batchEnd - batchStart);
-                    if (buffer.Length < length) buffer = new byte[Math.Max(length, 4096)];
-                    _memory.ReadMemory(pid, batchStart, buffer.AsMemory(0, length), cancel);
-                    reads++;
-
-                    for (var k = i; k < j; k++)
+                    if (b.Length == 0) return; // a section without previous hits
+                    for (var k = b.First; k < b.End; k++)
                     {
                         var address = previous.AddressAt(k);
-                        var current = buffer.AsSpan((int)(address - batchStart), size);
+                        var value = data.Slice((int)(address - b.Start), size);
                         // A string / byte array exact scan may change the length; then the old value isn't used.
                         var before = previous.ValueSize == size ? previous.ValueAt(k) : default;
-                        if (matcher.IsMatch(current, before))
-                            hits.Add(address, current);
+                        if (matcher.IsMatch(value, before))
+                            hits.Add(address, value);
                     }
-
-                    checkedCount += j - i;
-                    i = j;
-                    options.Progress?.Invoke(new ScanProgress(old.Section.Name, checkedCount, previous.Count, hits.Count));
-                }
-                stats.Add(SectionFinished(new SectionScanStats(old.Section, first, hits.Count - first, sectionWatch.Elapsed), options));
-            }
+                    reads++;
+                    bytes += b.Length;
+                    checkedCount += b.End - b.First;
+                    options.Progress?.Invoke(new ScanProgress(sections[b.Section].Section.Name, checkedCount, previous.Count, hits.Count));
+                }, cancel);
+            EndSection();
         }
         catch (OperationCanceledException)
         {
@@ -225,7 +251,47 @@ public sealed class ScanEngine
         }
 
         _log.Info(Cat, $"Next scan read {checkedCount} results in {reads} reads");
+        LogRate(bytes, readWatch.Elapsed);
         return Finish(pid, previous.ScanNumber + 1, "local", query, hits, stats, watch.Elapsed);
+    }
+
+    /// <summary>One next-scan read: results <c>[First, End)</c> of a section, <c>Length</c> bytes at <c>Start</c>.</summary>
+    private readonly record struct Batch(int Section, long First, long End, ulong Start, int Length);
+
+    /// <summary>
+    /// Groups each section's previous hits into reads: the batch grows while the next hit is at most
+    /// <paramref name="maxGap"/> bytes away and the read stays within <paramref name="maxBatch"/>.
+    /// A section without hits is one empty batch, so it still gets its stats row.
+    /// </summary>
+    private static IEnumerable<Batch> Batches(ScanResults previous, int size, ulong maxGap, ulong maxBatch)
+    {
+        for (var s = 0; s < previous.Sections.Count; s++)
+        {
+            var old = previous.Sections[s];
+            var end = old.FirstResult + old.Hits;
+            if (old.Hits == 0)
+            {
+                yield return new Batch(s, end, end, old.Section.Start, 0);
+                continue;
+            }
+            for (var i = old.FirstResult; i < end;)
+            {
+                var batchStart = previous.AddressAt(i);
+                var batchEnd = batchStart + (ulong)size;
+                var j = i + 1;
+                // Addresses are sorted; unaligned hits can overlap the batch end (gap 0).
+                while (j < end)
+                {
+                    var next = previous.AddressAt(j);
+                    if ((next > batchEnd ? next - batchEnd : 0) > maxGap || next + (ulong)size - batchStart > maxBatch)
+                        break;
+                    batchEnd = Math.Max(batchEnd, next + (ulong)size);
+                    j++;
+                }
+                yield return new Batch(s, i, j, batchStart, (int)(batchEnd - batchStart));
+                i = j;
+            }
+        }
     }
 
     /// <summary>
@@ -253,19 +319,21 @@ public sealed class ScanEngine
         long done = 0, count = 0;
         try
         {
-            foreach (var section in list)
-            {
-                var sectionWatch = Stopwatch.StartNew();
-                var first = count;
-                builder.BeginSection(section);
-                ReadSection(pid, section, size, cancel, (data, own, address) =>
+            long first = 0;
+            ReadSections(pid, list, size, cancel,
+                begin: s =>
+                {
+                    first = count;
+                    builder.BeginSection(list[s]);
+                },
+                chunk: (s, data, own, address) =>
                 {
                     count += builder.AddChunk(data, own, address);
                     done += own;
-                    options.Progress?.Invoke(new ScanProgress(section.Name, done, totalBytes, count));
-                });
-                stats.Add(SectionFinished(new SectionScanStats(section, first, count - first, sectionWatch.Elapsed), options));
-            }
+                    options.Progress?.Invoke(new ScanProgress(list[s].Name, done, totalBytes, count));
+                },
+                end: (s, elapsed) => stats.Add(SectionFinished(
+                    new SectionScanStats(list[s], first, count - first, elapsed), options)));
         }
         catch (OperationCanceledException)
         {
@@ -307,12 +375,13 @@ public sealed class ScanEngine
         long done = 0;
         try
         {
-            foreach (var s in snapshot.Sections)
-            {
-                var sectionWatch = Stopwatch.StartNew();
-                var first = hits.Count;
-                ReadSection(pid, s.Section, size, cancel, (data, own, address) =>
+            var sections = snapshot.Sections;
+            long first = 0;
+            ReadSections(pid, sections.Select(x => x.Section).ToList(), size, cancel,
+                begin: _ => first = hits.Count,
+                chunk: (i, data, own, address) =>
                 {
+                    var s = sections[i];
                     var offset = (long)(address - s.Section.Start);
                     var start = (int)((ulong)(alignment - (int)(address % (ulong)alignment)) % (ulong)alignment);
                     for (var o = start; o < own && o + size <= data.Length; o += alignment)
@@ -325,9 +394,9 @@ public sealed class ScanEngine
                     }
                     done += own;
                     options.Progress?.Invoke(new ScanProgress(s.Section.Name, done, totalBytes, hits.Count));
-                });
-                stats.Add(SectionFinished(new SectionScanStats(s.Section, first, hits.Count - first, sectionWatch.Elapsed), options));
-            }
+                },
+                end: (i, elapsed) => stats.Add(SectionFinished(
+                    new SectionScanStats(sections[i].Section, first, hits.Count - first, elapsed), options)));
         }
         catch (OperationCanceledException)
         {
@@ -337,34 +406,74 @@ public sealed class ScanEngine
         return Finish(pid, previous.ScanNumber + 1, "local", query, hits, stats, watch.Elapsed);
     }
 
-    private delegate void ChunkHandler(ReadOnlySpan<byte> data, int own, ulong address);
+    private delegate void SectionChunk(int section, ReadOnlySpan<byte> data, int own, ulong address);
+
+    /// <summary>One read of a section: <c>Own</c> bytes it owns plus the overlap, <c>Read</c> in all.</summary>
+    private readonly record struct Chunk(int Section, ulong Address, int Own, int Read);
 
     /// <summary>
-    /// Reads a section in <see cref="PS4MemSettings.ScanChunkBytes"/> chunks, each with
-    /// (<paramref name="valueSize"/> - 1) extra bytes clamped to the section end, like
-    /// <see cref="LocalSectionScanner"/>, and hands each chunk with the number of bytes it owns.
+    /// Every section in <see cref="PS4MemSettings.ScanChunkBytes"/> chunks, each with
+    /// (<paramref name="valueSize"/> - 1) extra bytes clamped to the section end, so a value on a
+    /// chunk edge is complete. An empty section is one empty chunk, so it still gets begin and end.
     /// </summary>
-    private void ReadSection(int pid, Section section, int valueSize, CancellationToken cancel, ChunkHandler chunk)
+    private static IEnumerable<Chunk> Chunks(IReadOnlyList<Section> sections, int chunkBytes, int valueSize)
     {
-        var chunkBytes = Math.Max(valueSize, _settings.ScanChunkBytes);
-        var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(chunkBytes + valueSize - 1);
-        try
+        for (var s = 0; s < sections.Count; s++)
         {
+            var section = sections[s];
+            if (section.End <= section.Start)
+            {
+                yield return new Chunk(s, section.Start, 0, 0);
+                continue;
+            }
             for (var pos = section.Start; pos < section.End;)
             {
-                cancel.ThrowIfCancellationRequested();
                 var left = section.End - pos;
                 var own = (int)Math.Min((ulong)chunkBytes, left);
                 var read = (int)Math.Min((ulong)own + (ulong)valueSize - 1, left);
-                _memory.ReadMemory(pid, pos, buffer.AsMemory(0, read), cancel);
-                chunk(buffer.AsSpan(0, read), own, pos);
+                yield return new Chunk(s, pos, own, read);
                 pos += (ulong)own;
             }
         }
-        finally
-        {
-            System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
-        }
+    }
+
+    /// <summary>
+    /// Reads <paramref name="sections"/> with every reader at once (<see cref="ParallelReader"/>).
+    /// <paramref name="chunk"/> gets the chunks in address order on this thread; <paramref name="begin"/>
+    /// runs before a section's first chunk and <paramref name="end"/> after its last, with the time
+    /// since the previous section ended. Logs the read rate.
+    /// </summary>
+    private void ReadSections(int pid, IReadOnlyList<Section> sections, int valueSize, CancellationToken cancel,
+        Action<int> begin, SectionChunk chunk, Action<int, TimeSpan> end)
+    {
+        var chunkBytes = Math.Max(valueSize, _settings.ScanChunkBytes);
+        var watch = Stopwatch.StartNew();
+        var sectionWatch = Stopwatch.StartNew();
+        var current = -1;
+        long bytes = 0;
+        ParallelReader.Run(_readers, pid, Chunks(sections, chunkBytes, valueSize),
+            c => new ReadRange(c.Address, c.Read),
+            (c, data) =>
+            {
+                if (c.Section != current)
+                {
+                    if (current >= 0) end(current, sectionWatch.Elapsed);
+                    sectionWatch.Restart();
+                    current = c.Section;
+                    begin(current);
+                }
+                if (c.Read > 0) chunk(c.Section, data, c.Own, c.Address);
+                bytes += c.Own;
+            }, cancel);
+        if (current >= 0) end(current, sectionWatch.Elapsed);
+        LogRate(bytes, watch.Elapsed);
+    }
+
+    private void LogRate(long bytes, TimeSpan elapsed)
+    {
+        var seconds = Math.Max(elapsed.TotalSeconds, 0.001);
+        _log.Info(Cat, $"Read {bytes / 1048576.0:0.0} MB in {seconds:0.0} s ({bytes / 1048576.0 / seconds:0.0} MB/s) " +
+                       $"with {_readers.Count} connection(s)");
     }
 
     private ScanHitBuffer NewBuffer(int valueSize, int capacity = 1024) =>

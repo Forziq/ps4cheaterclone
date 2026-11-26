@@ -3,9 +3,9 @@ using PS4Mem.Core.Sections;
 namespace PS4Mem.Core.Scanning;
 
 /// <summary>
-/// A first-scan back end: finds every match of a query in one section.
-/// <see cref="LocalSectionScanner"/> compares on the Mac and supports every query; the console
-/// back end compares on the PS4 and supports only some (<see cref="Supports"/>).
+/// A first-scan back end that compares somewhere other than the Mac: finds every match of a query
+/// in one section. The console back end compares on the PS4 and supports only some queries
+/// (<see cref="Supports"/>); everything else is scanned locally by <see cref="ScanEngine"/>.
 /// </summary>
 public interface ISectionScanner
 {

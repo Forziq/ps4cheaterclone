@@ -14,7 +14,7 @@ namespace PS4Mem.Core.Protocol;
 /// One lock guards the socket, so each command's request and reply never interleave with
 /// another thread's. There is a connect timeout and no read timeout (scans take minutes).
 /// </summary>
-public sealed class PS4DebugClient : IProcessMemory, IProcessControl, IDisposable
+public sealed class PS4DebugClient : IProcessMemory, IProcessControl, Connection.IReadableConnection
 {
     private const string Cat = "proto";
 
@@ -116,6 +116,18 @@ public sealed class PS4DebugClient : IProcessMemory, IProcessControl, IDisposabl
     }
 
     public void Dispose() => Disconnect();
+
+    /// <summary>
+    /// Closes the socket at once, without waiting for a command that's still waiting on the PS4
+    /// (that command then fails). No CMD_CONSOLE_END. Call <see cref="Dispose"/> afterwards.
+    /// </summary>
+    public void Abort()
+    {
+        var socket = Volatile.Read(ref _socket);
+        if (socket is null) return;
+        _log.Warn(Cat, $"Aborting the connection to {Endpoint}");
+        try { socket.Dispose(); } catch (ObjectDisposedException) { }
+    }
 
     // ---- Commands --------------------------------------------------------------------------
 

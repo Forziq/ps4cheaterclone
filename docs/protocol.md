@@ -194,6 +194,36 @@ Source: `NG/include/protocol.h:23`, `:104-109`, `NG/source/proc.c:320-357`, `LD/
 - libdebug receive buffer: 8192 (`LD/PS4DBG.cs:42`); Neo's copy uses 0x20000.
   This is only a local buffer size, not a wire limit.
 
+### 8.1 Reading with several connections
+
+One connection is slow for a scan: the server copies 64 KB with `sys_proc_rw`, sends it with
+`net_send_all`, then copies the next 64 KB (`NG/source/proc.c:340-351`), and its send buffer is
+65537 bytes (`NG/source/server.c:207-227`). So the request size mostly changes the number of round
+trips, not the rate. Clients scan with several connections instead:
+
+- PS4Cheater opens 3 connections and gives thread `i` the sections where `index % 3 == i`
+  (`PS4Cheater/PS4_Cheater/MemoryHelper.cs:47`, `:75-85`, `main.cs:487-508`).
+- PS4CheaterNeo runs up to `MaxQueryThreads` (default 3) reads at once over a pool of
+  `PS4DBGMutexFactor` (default 3) read connections (`PS4CheaterNeo/Query.cs:784-789`,
+  `common/ps4dbg/PS4Tool.cs:47-66`).
+- The server allows `SERVER_MAXCLIENTS` = 8 (`NG/include/server.h:15-16`) and runs each client
+  on its own thread (`NG/source/server.c:358-373`), so reads on different connections really run
+  at the same time. It sleeps 250 ms after each accept (`server.c:376`).
+- A client past the 8th: the TCP connect succeeds (backlog 16, `server.c:326`), then the server
+  closes the socket without a reply (`server.c:357-363`). The client sees EOF on its first reply.
+- `CMD_PROC_READ` needs no setup on a new connection: no auth, no version call
+  (`NG/source/server.c:44-88` dispatches it straight to `proc_read_handle`, `proc.c:320`).
+- Closing a connection frees only its own slot and Turbo Scan sessions (`server.c:20-33`). The
+  debugger is torn down only by the client that attached it (`NG/source/debug.c:455-462`).
+
+**PS4Mem:** local scans read with `ScanReadConnections` extra connections (default 3, 0 = the main
+connection only), opened on the first scan, checked with `CMD_VERSION` (a connection that fails or
+doesn't answer within the connect timeout is skipped) and closed with `CMD_CONSOLE_END` on
+disconnect. The main connection stays free for locks and live values. Chunks are compared in
+address order, so results don't depend on the number of connections. Unlike PS4CheaterNeo,
+which returns zeros when a read throws (`common/ps4dbg/PS4Tool.cs:402-404`), a failed read fails
+the scan.
+
 ## 9. `CMD_PROC_WRITE` `0xBDAA0003`
 
 Source: `NG/include/protocol.h:25`, `:168-173`, `NG/source/proc.c:448-543`, `LD/PS4DBG.Proc.cs:84-91`.

@@ -27,6 +27,15 @@ public sealed record AppSettings
     /// <summary>Write a debug log for each connection (see <see cref="Logging.DebugLog"/>).</summary>
     public bool DebugLogging { get; init; }
 
+    /// <summary>
+    /// Extra connections scans read with (<see cref="PS4MemSettings.ScanReadConnections"/>); null
+    /// uses the default. Used from the next connect.
+    /// </summary>
+    public int? ScanReadConnections { get; init; }
+
+    /// <summary>ps4debug allows 8 clients: the main connection, a debugger and these must fit.</summary>
+    public const int MaxScanReadConnections = 6;
+
     public static AppSettings Default { get; } = new();
 
     /// <summary>The settings the rest of Core uses, with these values on top of <paramref name="baseSettings"/>.</summary>
@@ -37,6 +46,7 @@ public sealed record AppSettings
         PayloadPort = LoaderPort,
         PayloadPath = PayloadPath,
         DebugLogging = DebugLogging,
+        ScanReadConnections = ScanReadConnections ?? baseSettings.ScanReadConnections,
     };
 
     /// <summary>Problems that stop these settings being saved (empty when they're fine).</summary>
@@ -51,6 +61,8 @@ public sealed record AppSettings
             errors.Add($"commandPort {CommandPort} must be 1-65535.");
         if (LoaderPort is < 1 or > 65535)
             errors.Add($"loaderPort {LoaderPort} must be 1-65535.");
+        if (ScanReadConnections is < 0 or > MaxScanReadConnections)
+            errors.Add($"scanReadConnections {ScanReadConnections} must be 0-{MaxScanReadConnections}.");
         if (string.IsNullOrWhiteSpace(PayloadPath))
             errors.Add("payloadPath must not be empty.");
         return errors;
@@ -78,6 +90,7 @@ public sealed record AppSettingsUpdate
     public int? LoaderPort { get; init; }
     public string? PayloadPath { get; init; }
     public bool? DebugLogging { get; init; }
+    public int? ScanReadConnections { get; init; }
 
     public AppSettings ApplyTo(AppSettings s) => s with
     {
@@ -87,5 +100,6 @@ public sealed record AppSettingsUpdate
         LoaderPort = LoaderPort ?? s.LoaderPort,
         PayloadPath = PayloadPath?.Trim() ?? s.PayloadPath,
         DebugLogging = DebugLogging ?? s.DebugLogging,
+        ScanReadConnections = ScanReadConnections ?? s.ScanReadConnections,
     };
 }

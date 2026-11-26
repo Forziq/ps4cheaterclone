@@ -410,7 +410,9 @@ public sealed class ScanSession : IDisposable
             if (options.PauseGame)
                 PauseGame(target, run, generation);
 
-            var engine = new ScanEngine(target.Memory, target.Settings, target.Log, console, storage);
+            // Even a console scan may fall back to reading here (unknown initial, unsupported compares).
+            var readers = target.Readers?.Invoke(cancel);
+            var engine = new ScanEngine(target.Memory, target.Settings, target.Log, console, storage, readers);
             results = scan(engine, new ScanOptions
             {
                 Method = console is null ? ScanMethod.Local : ScanMethod.Console,

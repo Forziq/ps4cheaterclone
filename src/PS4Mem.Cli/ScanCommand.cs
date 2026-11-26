@@ -1,3 +1,4 @@
+using PS4Mem.Core.Connection;
 using System.Buffers.Binary;
 using System.Globalization;
 using PS4Mem.Core;
@@ -57,7 +58,13 @@ internal static class ScanCommand
 
             var method = ChooseMethod(client, settings, log, options.Method);
             using var storage = new ScanStorage(settings.ScanDataDirectory, log);
-            var engine = new ScanEngine(client, settings, log, method.Console, storage);
+            using var pool = new ScanReaderPool(() => new PS4DebugClient(settings, log), settings.ScanReadConnections, log,
+                settings.ConnectTimeout);
+            var readers = pool.Acquire();
+            Console.WriteLine(readers.Count > 0
+                ? $"Scans read with {readers.Count} extra connection(s)."
+                : "Scans read on the main connection.");
+            var engine = new ScanEngine(client, settings, log, method.Console, storage, readers);
             var scanOptions = new ScanOptions
             {
                 Method = method.Console is null ? ScanMethod.Local : ScanMethod.Console,
