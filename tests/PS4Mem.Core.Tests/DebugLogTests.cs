@@ -88,7 +88,7 @@ public class DebugLogTests
         var dir = Path.Combine(Path.GetTempPath(), "ps4mem-log-test-" + Guid.NewGuid().ToString("N"));
         try
         {
-            var settings = PS4MemSettings.Default with { DebugLogging = true, LogDirectory = dir };
+            var settings = PS4MemSettings.Default with { DebugLogging = true, LogDirectory = dir, ConsoleIp = "192.0.2.10" };
             string path;
             using (var log = DebugLog.Create(settings))
             {
@@ -100,7 +100,7 @@ public class DebugLogTests
             Assert.Matches(@"ps4mem-\d{8}-\d{6}\.log$", path);
             var text = File.ReadAllText(path);
             Assert.Contains("PS4 Mem debug log started", text);
-            Assert.Contains("console 192.168.0.99:744", text);
+            Assert.Contains("console 192.0.2.10:744", text);
             Assert.Contains("[test] written to file", text);
         }
         finally

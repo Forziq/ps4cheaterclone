@@ -35,7 +35,12 @@ public sealed class PS4DebugClient : IDisposable
     public string? Endpoint { get; private set; }
 
     /// <summary>Connects to the settings' console IP and command port.</summary>
-    public void Connect() => Connect(_settings.ConsoleIp, _settings.CommandPort);
+    public void Connect()
+    {
+        if (string.IsNullOrWhiteSpace(_settings.ConsoleIp))
+            throw new Ps4ProtocolException(ConsoleIpResolver.NotSetMessage);
+        Connect(_settings.ConsoleIp, _settings.CommandPort);
+    }
 
     /// <summary>
     /// Opens the TCP connection. ps4debug sends no greeting (protocol.md §2), so this only

@@ -6,8 +6,11 @@ namespace PS4Mem.Core;
 /// </summary>
 public sealed record PS4MemSettings
 {
-    /// <summary>PS4 address on the LAN.</summary>
-    public string ConsoleIp { get; init; } = "192.168.0.99";
+    /// <summary>
+    /// PS4 address on the LAN. Empty by default: each user sets their own
+    /// (see <see cref="ConsoleIpResolver"/>).
+    /// </summary>
+    public string ConsoleIp { get; init; } = "";
 
     /// <summary>ps4debug command port (client connects here for everything).</summary>
     public int CommandPort { get; init; } = 744;

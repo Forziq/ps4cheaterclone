@@ -5,7 +5,7 @@ using PS4Mem.Core.Protocol;
 // PS4 Mem CLI.
 // Global flags (work with every command):
 //   --debug         write a debug log to logs/ (same as PS4MEM_DEBUG=1)
-//   --ip <ip>       console IP (default from PS4MemSettings)
+//   --ip <ip>       console IP (else PS4_IP, then ps4ip.local, then app settings)
 //   --port <port>   ps4debug command port (default 744)
 // Commands:
 //   info            ps4debug version and the process list (read-only)
@@ -17,7 +17,6 @@ var ip = TakeOption(argList, "--ip");
 var port = TakeOption(argList, "--port");
 
 var settings = PS4MemSettings.Default with { DebugLogging = debug };
-if (ip is not null) settings = settings with { ConsoleIp = ip };
 if (port is not null)
 {
     if (!int.TryParse(port, out var p) || p is < 1 or > 65535)
@@ -25,10 +24,26 @@ if (port is not null)
     settings = settings with { CommandPort = p };
 }
 
+// No built-in IP: it's private to each user (ConsoleIpResolver explains the order).
+string? ipSource = null;
+try
+{
+    if (ConsoleIpResolver.Resolve(ip) is { } resolved)
+    {
+        settings = settings with { ConsoleIp = resolved.Ip };
+        ipSource = resolved.Source;
+    }
+}
+catch (ArgumentException e)
+{
+    return Fail(e.Message);
+}
+
 using var log = DebugLog.Create(settings);
 if (log.IsEnabled)
     Console.WriteLine($"Debug log: {log.FilePath}");
 log.Info("cli", $"Started with args: [{string.Join(' ', args)}]");
+log.Info("cli", ipSource is null ? "Console IP not set" : $"Console IP from {ipSource}");
 
 var command = argList.FirstOrDefault();
 switch (command)
@@ -45,6 +60,9 @@ switch (command)
 
 static int Info(PS4MemSettings settings, DebugLog log)
 {
+    if (settings.ConsoleIp.Length == 0)
+        return Fail(ConsoleIpResolver.NotSetMessage);
+
     using var client = new PS4DebugClient(settings, log);
     try
     {
@@ -80,7 +98,8 @@ static void PrintUsage(PS4MemSettings s)
           info     Show the ps4debug version and the process list (read-only).
 
         Options:
-          --ip     Console IP (default {s.ConsoleIp})
+          --ip     Console IP. If not given: the {ConsoleIpResolver.EnvironmentVariable} environment variable,
+                   then {ConsoleIpResolver.LocalFileName} (copy ps4ip.example), then the app settings.
           --port   ps4debug command port (default {s.CommandPort})
           --debug  Write a debug log to {s.LogDirectory}/ (same as {DebugLog.EnvironmentVariable}=1)
         """);

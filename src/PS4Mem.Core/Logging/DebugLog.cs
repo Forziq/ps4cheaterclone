@@ -106,7 +106,7 @@ public sealed class DebugLog : IDisposable
         Info("log", "PS4 Mem debug log started");
         Info("log", $"OS: {RuntimeInformation.OSDescription} ({RuntimeInformation.OSArchitecture}), " +
                     $".NET {Environment.Version}");
-        Info("log", $"Settings: console {s.ConsoleIp}:{s.CommandPort}, debugger port {s.DebuggerPort}, " +
+        Info("log", $"Settings: console {(s.ConsoleIp.Length > 0 ? s.ConsoleIp : "(IP not set)")}:{s.CommandPort}, debugger port {s.DebuggerPort}, " +
                     $"loader port {s.PayloadPort}, payload '{s.PayloadPath}', " +
                     $"section filter [{string.Join(", ", s.SectionNameFilter)}]");
     }
